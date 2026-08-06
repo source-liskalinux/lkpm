@@ -8,6 +8,7 @@ pkgver=1.0.0
 pkgrel=1
 pkgdesc="Liska Core Toolchain Ecosystem"
 arch=('x86_64')
+url="https://github.com/source-liskalinux/lkpm"
 license=('GPL-3.0-or-later')
 depends=(
     'ca-certificates' 'sqlite' 'zstd' 'xz' 'busybox' 'cpio' 'kmod' 'bash'
