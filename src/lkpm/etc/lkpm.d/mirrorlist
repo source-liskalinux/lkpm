@@ -1,0 +1,44 @@
+# ----------------------------------------------------------
+# ::: [ LISKA PACKAGE MANAGER MIRRORLIST CONFIGURATION ] :::
+# ----------------------------------------------------------
+#
+# This file configures repository URLs rules for lkpm.
+#
+# > Sections: [core] | [extra]
+#
+# > [core] section are the most prioritized repo for lkpm running
+#   smoothly. The [core] packages cant get overwrited by [extra] 
+#   section to ensure system stability. If you change the [core] 
+#   URLs, made sure you know what you are doing.
+#
+# > [extra] section are used for custom repository a.k.a Liska User
+#   Repository and will get called by lkpm if the packages not
+#   exits on the [core] section. Made sure the custom repository 
+#   host tar files (.tar, .tar.zst, .tar.gz, or .tar.xz) and have 
+#   package metadata like .PKGINFO or .BUILDINFO.
+#
+# > NOTE: Changes take effect the next time "lkpm" is called 
+#         (no daemon restart) using "lkpm -r".
+# --------------------------------------------------------------------------
+
+
+# :: [ CORE ] ::
+# System main repository URLs.
+# 
+# WARNING: If you change the URLs, made sure the packages is supporting
+#          Linux packages system!
+# --------------------------------------------------------------------------
+[core]
+https://repo-liskalinux.github.io/x86_64/core/
+https://repo-liskalinux.github.io/x86_64/extra/
+#https://repo-liskalinux.github.io/x86_64/multilib/
+
+# :: [ EXTRA ] ::
+# Third-party repository URLs.
+#
+# WARNING: Liska Linux Project is not responsible for the privacy practices,
+#          availability, or content provided by third-party repositories!
+# --------------------------------------------------------------------------
+#[extra]
+#https://foo.org/
+#http://bar.org/

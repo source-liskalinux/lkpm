@@ -1,0 +1,8 @@
+src/lkpm/target
+src/lkpm/Cargo.lock
+src/lkmake/target
+src/lkmake/Cargo.lock
+src/lkinit/target
+src/lkinit/Cargo.lock
+src/lkchroot/target
+src/lkchroot/Cargo.lock
