@@ -6,9 +6,9 @@ use std::io::{Write, Read};
 use colored::*;
 use indicatif::{ProgressBar, ProgressStyle};
 
-pub fn info(msg: &str) { println!("{} {}", "[i]".bright_cyan(), msg); }
-pub fn success(msg: &str) { println!("{} {}", "[✓]".bright_green(), msg.bright_green()); }
-pub fn error(msg: &str) { eprintln!("{} {}", "[✗]".bright_red(), msg.bright_red()); }
+fn info(msg: &str) { println!("{} {}", "[i]".bright_cyan(), msg); }
+fn success(msg: &str) { println!("{} {}", "[✓]".bright_green(), msg.bright_green()); }
+fn error(msg: &str) { eprintln!("{} {}", "[✗]".bright_red(), msg.bright_red()); }
 
 fn require_root() {
     if unsafe { libc::geteuid() } != 0 {
