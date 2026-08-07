@@ -4,7 +4,7 @@ version = "1.0.0"
 edition = "2024"
 
 [dependencies]
-reqwest = { version = "0.13.4", features = ["blocking", "rustls-tls"] }
+reqwest = { version = "0.13.4", features = ["blocking", "rustls"] }
 indicatif = "0.18.6"
 colored = "3.1.1"
 sha2 = "0.11.0"
@@ -12,11 +12,25 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 anyhow = "1.0"
 nix = "0.31.3"
-libc = "0.2"
+libc = "0.2.189"
 scraper = "0.27.0"
 tar = "0.4"
 zstd = "0.13.3"
 flate2 = "1.0"
 xz2 = "0.1"
-rusqlite = { version = "0.40.1", features = ["bundled", "vendored"] }
+rusqlite = { version = "0.40.1", features = ["bundled"] }
 mlua = { version = "0.12.0", features = ["lua54", "vendored"] }
+chrono = "0.4"
+hex = "0.4"
+
+[[bin]]
+name = "lkmake"
+path = "src/bin/lkmake.rs"
+
+[[bin]]
+name = "lkinit"
+path = "src/bin/lkinit.rs"
+
+[[bin]]
+name = "lkchroot"
+path = "src/bin/lkchroot.rs"

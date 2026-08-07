@@ -1,12 +1,4 @@
-mod cli;
-mod config;
-mod database;
-mod downloader;
-mod error;
-mod manager;
-mod pkg_utils;
-mod repo;
-mod ui;
+use lkpm::{cli, manager, ui};
 
 use crate::cli::parse;
 

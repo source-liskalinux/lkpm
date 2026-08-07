@@ -1,9 +1,0 @@
-[package]
-name = "lkmake"
-version = "1.0.0"
-edition = "2024"
-
-[dependencies]
-libc = "0.2.189"
-chrono = "0.4"
-colored = "3.1.1"

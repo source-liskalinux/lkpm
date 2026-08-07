@@ -40,8 +40,16 @@ fn require_root_for_install_root(cfg: &Config) -> Result<(), LkpmError> {
 fn file_sha256(path: &PathBuf) -> Result<String, LkpmError> {
     let mut file = fs::File::open(path).map_err(LkpmError::Io)?;
     let mut hasher = Sha256::new();
-    std::io::copy(&mut file, &mut hasher).map_err(LkpmError::Io)?;
-    Ok(format!("{:x}", hasher.finalize()))
+    let mut buffer = [0; 8192];
+    loop {
+        let count = std::io::Read::read(&mut file, &mut buffer).map_err(LkpmError::Io)?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+    }
+    let result = hasher.finalize();
+    Ok(hex::encode(result))
 }
 
 fn package_size(path: &Path) -> u64 {

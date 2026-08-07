@@ -22,17 +22,7 @@ optdepends=(
 makedepends=('rust' 'pkgconf' 'sqlite')
 
 build() {
-    echo "--> [BUILD] Compiling lkpm...."
-    cd "${srcdir}/lkpm"
-    cargo build --release
-    echo "--> [BUILD] Compiling lkmake...."
-    cd "${srcdir}/lkmake"
-    cargo build --release
-    echo "--> [BUILD] Compiling lkinit...."
-    cd "${srcdir}/lkinit"
-    cargo build --release
-    echo "--> [BUILD] Compiling lkchroot...."
-    cd "${srcdir}/lkchroot"
+    echo "--> [BUILD] Compiling lkpm, lkmake, lkinit, and lkchroot...."
     cargo build --release
 }
 
@@ -40,20 +30,20 @@ package() {
     install -d "${pkgdir}/usr/bin"
     install -d "${pkgdir}/etc"
     echo "--> [PACKAGE] Installing lkpm...."
-    install -Dm755 "${srcdir}/lkpm/target/release/lkpm" "${pkgdir}/usr/bin/lkpm"
-    if [ -f "${srcdir}/lkpm/etc/lkpm.d/config.lua" ]; then
-        install -Dm644 "${srcdir}/lkpm/etc/lkpm.d/config.lua" "${pkgdir}/etc/lkpm.d/config.lua"
+    install -Dm755 "./target/release/lkpm" "${pkgdir}/usr/bin/lkpm"
+    if [ -f "./etc/lkpm.d/config.lua" ]; then
+        install -Dm644 "./etc/lkpm.d/config.lua" "${pkgdir}/etc/lkpm.d/config.lua"
     fi
-    if [ -f "${srcdir}/lkpm/etc/lkpm.d/mirrorlist" ]; then
-        install -Dm644 "${srcdir}/lkpm/etc/lkpm.d/mirrorlist" "${pkgdir}/etc/lkpm.d/mirrorlist"
+    if [ -f "./etc/lkpm.d/mirrorlist" ]; then
+        install -Dm644 "./etc/lkpm.d/mirrorlist" "${pkgdir}/etc/lkpm.d/mirrorlist"
     fi
     echo "--> [PACKAGE] Installing lkmake...."
-    install -Dm755 "${srcdir}/lkmake/target/release/lkmake" "${pkgdir}/usr/bin/lkmake"
+    install -Dm755 "./target/release/lkmake" "${pkgdir}/usr/bin/lkmake"
     echo "--> [PACKAGE] Installing lkinit...."
-    install -Dm755 "${srcdir}/lkinit/target/release/lkinit" "${pkgdir}/usr/bin/lkinit"
-    if [ -f "${srcdir}/lkinit/etc/lkinit.d/init.rs" ]; then
-        install -Dm644 "${srcdir}/lkinit/etc/lkinit.d/init.rs" "${pkgdir}/etc/lkinit.d/init.rs"
+    install -Dm755 "./target/release/lkinit" "${pkgdir}/usr/bin/lkinit"
+    if [ -f "./etc/lkinit.d/init.rs" ]; then
+        install -Dm644 "./etc/lkinit.d/init.rs" "${pkgdir}/etc/lkinit.d/init.rs"
     fi
     echo "--> [PACKAGE] Installing lkchroot...."
-    install -Dm755 "${srcdir}/lkchroot/target/release/lkchroot" "${pkgdir}/usr/bin/lkchroot"
+    install -Dm755 "./target/release/lkchroot" "${pkgdir}/usr/bin/lkchroot"
 }

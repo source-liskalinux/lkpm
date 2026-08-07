@@ -1,8 +1,0 @@
-[package]
-name = "lkchroot"
-version = "1.0.0"
-edition = "2024"
-
-[dependencies]
-colored = "3.1.1"
-libc = "0.2.187"
