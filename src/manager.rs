@@ -931,9 +931,9 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
         }
         Command::Help => {
             println!("");
-            println!("--------------------------------------------");
-            println!("::: [ Liska Package Manager (v1.1.0-1) ] :::");
-            println!("--------------------------------------------");
+            println!("-----------------------------------------");
+            println!("::: [ Liska Package Manager (1.1.0) ] :::");
+            println!("-----------------------------------------");
             println!("");
             println!("Usage: lkpm <command> [options]");
             println!("> -i <pkgs>                  install a package(s) to the system");
