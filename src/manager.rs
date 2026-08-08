@@ -222,8 +222,16 @@ fn resolve_installation_plan(
         if planned.contains_key(&package_name) {
             continue;
         }
-        let repo_info = repo::find_repo_package_info(cfg, &package_name)?
-            .ok_or_else(|| LkpmError::PackageNotFound(package_name.clone()))?;
+        let repo_info = match repo::find_repo_package_info(cfg, &package_name)? {
+            Some(info) => info,
+            None => {
+                ui::warning(&format!(
+                    "Package '{}' not found in mirrorlist metadata! Skipping....",
+                    package_name
+                ));
+                continue;
+            }
+        };
         let actual_name = canonical_package_name(&repo_info.name);
         if planned.contains_key(&actual_name) {
             continue;
@@ -247,10 +255,11 @@ fn resolve_installation_plan(
                     metadata: None,
                 });
             } else {
-                return Err(LkpmError::Other(format!(
-                    "Dependency {} not found in configured repositories!",
+                ui::warning(&format!(
+                    "Dependency '{}' not found in mirrorlist metadata! Skipping...",
                     dep_name
-                )));
+                ));
+                continue;
             }
         }
         planned.insert(
