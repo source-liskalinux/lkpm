@@ -4,7 +4,7 @@
 # Maintainer: Janorovic Volkov <janorovicvolkov@gmail.com>
 
 pkgname=lkpm
-pkgver=1.0.0
+pkgver=1.1.0
 pkgrel=1
 pkgdesc="Liska Core Toolchain Ecosystem"
 arch=('x86_64')
