@@ -139,6 +139,9 @@ fn topological_install_order_from_planned(
         for dep in &item.depends {
             let clean_dep = pkg::normalize_dependency_name(dep);
             let dep_canonical = canonical_package_name(&clean_dep);
+            if dep_canonical == *pkg_name {
+                continue;
+            }
             if planned.contains_key(&dep_canonical) {
                 graph.entry(dep_canonical.to_string()).or_default().push(pkg_name.clone());
                 *in_degree.entry(pkg_name.clone()).or_insert(0) += 1;
@@ -151,23 +154,38 @@ fn topological_install_order_from_planned(
         .map(|(node, _)| node.clone())
         .collect();
     let mut order = Vec::new();
-    while let Some(node) = queue.pop_front() {
-        order.push(node.clone());
-        if let Some(neighbors) = graph.get(&node) {
-            for neighbor in neighbors {
-                if let Some(deg) = in_degree.get_mut(neighbor) {
-                    *deg -= 1;
-                    if *deg == 0 {
-                        queue.push_back(neighbor.clone());
+    while order.len() < planned.len() {
+        if let Some(node) = queue.pop_front() {
+            order.push(node.clone());
+            if let Some(neighbors) = graph.get(&node) {
+                for neighbor in neighbors {
+                    if let Some(deg) = in_degree.get_mut(neighbor) {
+                        if *deg > 0 {
+                            *deg -= 1;
+                            if *deg == 0 {
+                                queue.push_back(neighbor.clone());
+                            }
+                        }
                     }
                 }
             }
+        } else {
+            let next_node = in_degree
+                .iter()
+                .filter(|(node, _)| !order.contains(node))
+                .min_by_key(|(_, &deg)| deg)
+                .map(|(node, _)| node.clone());
+            if let Some(node) = next_node {
+                ui::warning(&format!(
+                    "Cyclic dependency detected involving '{}'. Breaking cycle automatically...",
+                    node
+                ));
+                in_degree.insert(node.clone(), 0);
+                queue.push_back(node);
+            } else {
+                break;
+            }
         }
-    }
-    if order.len() != planned.len() {
-        return Err(LkpmError::Other(
-            "Cyclic dependency detected during installation planning!".to_string(),
-        ));
     }
     Ok(order)
 }
