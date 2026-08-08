@@ -10,6 +10,7 @@ use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use crate::config::Config;
 use crate::error::LkpmError;
 use crate::repo;
+use crate::ui;
 
 fn http_client() -> anyhow::Result<Client> {
     Ok(Client::builder()
@@ -136,7 +137,7 @@ pub fn download_packages_concurrently(
         match res {
             Ok(path) => results[index] = Some(path),
             Err(e) => {
-                eprintln!("Warning: Gagal mendownload package #{}. Skip langsung! (Error: {})", index, e);
+                ui::warning(&format!("Failed to download {}! Skipping.... (Error: {})", index, e));
             }
         }
     }
