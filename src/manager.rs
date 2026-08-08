@@ -173,7 +173,7 @@ fn topological_install_order_from_planned(
             let next_node = in_degree
                 .iter()
                 .filter(|(node, _)| !order.contains(node))
-                .min_by_key(|(_, &deg)| deg)
+                .min_by_key(|&(_, &deg)| deg)
                 .map(|(node, _)| node.clone());
             if let Some(node) = next_node {
                 ui::warning(&format!(
