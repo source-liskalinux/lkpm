@@ -296,64 +296,7 @@ pub fn find_pkg_in_repos_location(
     cfg: &Config,
     package: &str,
 ) -> Result<Option<PackageLocation>, LkpmError> {
-    if let Some(location) = find_pkg_in_json_repos(cfg, package)? {
-        return Ok(Some(location));
-    }
-    let client = Client::builder().build().map_err(|e| LkpmError::Network(e.to_string()))?;
-    let roots = repo_roots(cfg);
-    let selector =
-        Selector::parse("a").map_err(|_| LkpmError::Other("Failed to parse HTML".into()))?;
-    let mut visited: HashSet<String> = HashSet::new();
-    let mut queue = VecDeque::new();
-    for root in roots.into_iter() {
-        visited.insert(root.clone());
-        queue.push_back((root, 0));
-    }
-    while let Some((url, depth)) = queue.pop_front() {
-        if depth > MAX_SCAN_DEPTH {
-            continue;
-        }
-        let resp = client.get(url.clone()).send();
-        let resp = match resp {
-            Ok(resp) if resp.status().is_success() => resp,
-            _ => continue,
-        };
-        let body = match resp.text() {
-            Ok(text) => text,
-            Err(_) => continue,
-        };
-        let doc = Html::parse_document(&body);
-        for anchor in doc.select(&selector) {
-            if let Some(href) = anchor.value().attr("href") {
-                let target = normalize_url(&url, href);
-                if is_directory_link(href) {
-                    if visited.insert(target.clone()) {
-                        queue.push_back((target, depth + 1));
-                    }
-                    continue;
-                }
-                if !is_package_file(href) {
-                    continue;
-                }
-                let file_name = file_name_from_href(href);
-                if let Some(location) = candidate_location(cfg, package, target, &file_name) {
-                    return Ok(Some(location));
-                }
-            }
-        }
-        for line in body.lines() {
-            let token = line.trim();
-            if !is_package_file(token) {
-                continue;
-            }
-            let file_name = file_name_from_href(token);
-            let target = normalize_url(&url, token);
-            if let Some(location) = candidate_location(cfg, package, target, &file_name) {
-                return Ok(Some(location));
-            }
-        }
-    }
-    Ok(None)
+    find_pkg_in_json_repos(cfg, package)
 }
 
 pub fn refresh_repo_metadata(cfg: &Config) -> Result<Vec<PathBuf>, LkpmError> {
