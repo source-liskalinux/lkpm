@@ -100,6 +100,7 @@ pub fn canonical_package_name(package: &str) -> &str {
     match package {
         "kernel" => "linux",
         "sh" => "bash",
+        "systemd" => "lksystem",
         _ => package,
     }
 }
