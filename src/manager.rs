@@ -352,41 +352,26 @@ struct InstallTarget {
 }
 
 fn build_install_target(cfg: &Config, package: &str) -> Result<InstallTarget, LkpmError> {
-    let (location, requested_name) =
-        if package.starts_with("http://") || package.starts_with("https://") {
-            (repo::PackageLocation::Remote(package.to_string()), None)
-        } else {
-            let candidate = PathBuf::from(package);
-            if candidate.exists() {
-                return Err(LkpmError::Other(
-                    "Local package installation is disabled.".into(),
-                ));
-            }
-            ensure_package_is_not_blocked(cfg, package)?;
-            if let Some(repo_location) = repo::find_pkg_in_repos_location(cfg, package)? {
-                (repo_location, Some(package.to_string()))
-            } else {
-                return Err(LkpmError::PackageNotFound(format!(
-                    "'{}' not found in configured repositories!",
-                    package
-                )));
-            }
-        };
-    let metadata = match &location {
-        repo::PackageLocation::Remote(_) => None,
-    };
-    let source = if package.starts_with("http://") || package.starts_with("https://") {
-        package.to_string()
-    } else {
-        match &location {
-            repo::PackageLocation::Remote(url) => url.clone(),
-        }
-    };
+    if package.starts_with("http://") || package.starts_with("https://") {
+        return Ok(InstallTarget {
+            requested_name: None,
+            source: package.to_string(),
+            location: repo::PackageLocation::Remote(package.to_string()),
+            metadata: None,
+        });
+    }
+    ensure_package_is_not_blocked(cfg, package)?;
+    let repo_info = repo::find_repo_package_info(cfg, package)?
+        .ok_or_else(|| LkpmError::PackageNotFound(format!("'{}' not found in repositories!", package)))?;
+    let location = repo::find_pkg_in_repos_location(cfg, &repo_info.name)?
+        .ok_or_else(|| LkpmError::PackageNotFound(format!("Download location for '{}' not found!", package)))?;
     Ok(InstallTarget {
-        requested_name,
-        source,
+        requested_name: Some(repo_info.name.clone()),
+        source: match &location {
+            repo::PackageLocation::Remote(url) => url.clone(),
+        },
         location,
-        metadata,
+        metadata: None,
     })
 }
 
