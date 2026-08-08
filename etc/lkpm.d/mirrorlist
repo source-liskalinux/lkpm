@@ -29,9 +29,10 @@
 #          Linux packages system!
 # --------------------------------------------------------------------------
 [core]
-https://repo-liskalinux.github.io/x86_64/core
-https://repo-liskalinux.github.io/x86_64/extra
-https://repo-liskalinux.github.io/x86_64/multilib
+https://repo-liskalinux.github.io/x86_64/galaxy
+#https://repo-liskalinux.github.io/x86_64/lib32
+https://repo-liskalinux.github.io/x86_64/system
+https://repo-liskalinux.github.io/x86_64/world
 
 # :: [ EXTRA ] ::
 # Third-party repository URLs.
