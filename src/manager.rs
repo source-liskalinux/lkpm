@@ -734,22 +734,17 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
             }
             let mut update_targets = Vec::new();
             for record in installed_packages.into_iter() {
-                if let Ok(Some(location)) = repo::find_pkg_in_repos_location(&cfg, &record.name) {
-                    match location {
-                        repo::PackageLocation::Remote(url) => {
-                            if let Some(version) = repo::extract_package_version(
-                                &record.name,
-                                &repo::package_file_name_from_url(&url),
-                            ) && version != record.version {
-                                if package_list_contains(&cfg.no_update_packages, &record.name) {
-                                    continue;
-                                }
-                                update_targets.push(UpdateTarget {
-                                    record,
-                                    location: repo::PackageLocation::Remote(url),
-                                    remote_version: version,
-                                });
-                            }
+                if let Ok(Some(repo_pkg)) = repo::find_repo_package_info(&cfg, &record.name) {
+                    if repo_pkg.version != record.version {
+                        if package_list_contains(&cfg.no_update_packages, &record.name) {
+                            continue;
+                        }
+                        if let Ok(Some(location)) = repo::find_pkg_in_repos_location(&cfg, &record.name) {
+                            update_targets.push(UpdateTarget {
+                                record,
+                                location,
+                                remote_version: repo_pkg.version,
+                            });
                         }
                     }
                 }
