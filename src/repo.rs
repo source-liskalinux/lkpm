@@ -508,17 +508,13 @@ fn find_pkg_in_json_repos(
             Err(_) => continue,
         };
         for pkg in packages.iter() {
-            let package_url = normalize_json_package_url(repo_url, &pkg.url);
-            let file_name = package_file_name_from_url(&package_url);
-            if file_name.is_empty() {
-                continue;
-            }
-            let matches_name = package_file_matches(package, &file_name);
+            let matches_name = package_name_matches_request(package, &pkg.name);
             let matches_provide = pkg
                 .provides
                 .iter()
                 .any(|provide| package_name_matches_request(package, provide));
             if matches_name || matches_provide {
+                let package_url = normalize_json_package_url(repo_url, &pkg.url);
                 return Ok(Some(PackageLocation::Remote(package_url)));
             }
         }
