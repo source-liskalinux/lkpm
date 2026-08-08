@@ -101,6 +101,7 @@ pub fn canonical_package_name(package: &str) -> &str {
         "kernel" => "linux",
         "sh" => "bash",
         "systemd" => "lksystem",
+        "bsdtar" => "libarchive",
         _ => package,
     }
 }
