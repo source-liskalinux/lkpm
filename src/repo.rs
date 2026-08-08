@@ -3,15 +3,12 @@ use crate::downloader::download_to;
 use crate::database;
 use crate::error::LkpmError;
 use reqwest::blocking::Client;
-use scraper::{Html, Selector};
 use serde::Deserialize;
 use serde_json;
-use std::collections::{HashSet, VecDeque};
 use std::fs;
 use std::io::{Cursor, Read};
 use std::path::PathBuf;
 
-const MAX_SCAN_DEPTH: usize = 4;
 const SUPPORTED_PACKAGE_EXTENSIONS: &[&str] = &[
     "pkg.tar.zst",
     "pkg.tar.xz",
@@ -74,10 +71,6 @@ fn normalize_url(base: &str, href: &str) -> String {
     }
 }
 
-fn is_directory_link(href: &str) -> bool {
-    href.ends_with('/')
-}
-
 fn file_name_from_href(href: &str) -> String {
     href.split('?')
     .next()
@@ -87,13 +80,6 @@ fn file_name_from_href(href: &str) -> String {
     .next_back()
         .unwrap_or(href)
         .to_string()
-}
-
-fn is_package_file(href: &str) -> bool {
-    let lower = href.to_lowercase();
-    SUPPORTED_PACKAGE_EXTENSIONS
-        .iter()
-        .any(|ext| lower.ends_with(ext))
 }
 
 pub fn canonical_package_name(package: &str) -> &str {
@@ -200,24 +186,6 @@ pub fn package_name_from_file_name(file_name: &str) -> String {
     parse_package_file_metadata(file_name)
         .map(|metadata| metadata.name)
         .unwrap_or_else(|| file_name.to_string())
-}
-
-fn package_file_matches(package: &str, file_name: &str) -> bool {
-    parse_package_file_metadata(file_name)
-        .map(|metadata| package_name_matches_request(package, &metadata.name))
-        .unwrap_or(false)
-}
-
-fn candidate_location(
-    _cfg: &Config,
-    package: &str,
-    target: String,
-    file_name: &str,
-) -> Option<PackageLocation> {
-    if !package_file_matches(package, file_name) {
-        return None;
-    }
-    Some(PackageLocation::Remote(target))
 }
 
 pub fn extract_package_version(package: &str, file_name: &str) -> Option<String> {
