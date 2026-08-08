@@ -74,7 +74,7 @@ pub fn download_to(
 pub fn download_packages_concurrently(
     cfg: &Config,
     urls: &[String],
-) -> Result<Vec<PathBuf>, LkpmError> {
+) -> Result<Vec<Option<PathBuf>>, LkpmError> {
     let total = urls.len();
     if total == 0 {
         return Ok(Vec::new());
@@ -133,15 +133,13 @@ pub fn download_packages_concurrently(
     drop(tx);
     let mut results = vec![None; total];
     for (index, res) in rx {
-        let path = res?;
-        results[index] = Some(path);
+        match res {
+            Ok(path) => results[index] = Some(path),
+            Err(e) => {
+                eprintln!("Warning: Gagal mendownload package #{}. Skip langsung! (Error: {})", index, e);
+            }
+        }
     }
     overall_pb.finish_and_clear();
-    results
-        .into_iter()
-        .enumerate()
-        .map(|(i, path_opt)| {
-            path_opt.ok_or_else(|| LkpmError::Other(format!("Missing download result for package #{}", i)))
-        })
-        .collect()
+    Ok(results)
 }
