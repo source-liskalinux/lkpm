@@ -19,9 +19,9 @@ fn require_root() {
 
 fn run_command(cmd: &str, args: &[&str]) -> Result<(), String> {
     let status = Command::new(cmd)
-        .args(args)
-        .status()
-        .map_err(|err| format!("Could not start {}: {}", cmd, err))?;
+    .args(args)
+    .status()
+    .map_err(|err| format!("Could not start {}: {}", cmd, err))?;
     if status.success() { Ok(()) } else { Err(format!("Command {} failed to run!", cmd)) }
 }
 
@@ -58,20 +58,20 @@ fn pack_initramfs_with_progress(temp_ramdisk: &Path, output_img: &Path) -> Resul
     );
     pb.set_prefix("Packing initramfs:");
     let mut cpio = Command::new("cpio")
-        .args(&["-H", "newc", "-o", "--quiet"])
-        .current_dir(temp_ramdisk)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| format!("Failed to run cpio: {}", e))?;
+    .args(&["-H", "newc", "-o", "--quiet"])
+    .current_dir(temp_ramdisk)
+    .stdin(Stdio::piped())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::null())
+    .spawn()
+    .map_err(|e| format!("Failed to run cpio: {}", e))?;
     let mut zstd = Command::new("zstd")
-        .args(&["-19", "-T0", "-q", "-f", "-o", output_img.to_str().unwrap()])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| format!("Failed to run zstd: {}", e))?;
+    .args(&["-19", "-T0", "-q", "-f", "-o", output_img.to_str().unwrap()])
+    .stdin(Stdio::piped())
+    .stdout(Stdio::null())
+    .stderr(Stdio::null())
+    .spawn()
+    .map_err(|e| format!("Failed to run zstd: {}", e))?;
     let mut cpio_stdin = cpio.stdin.take().ok_or("Failed to open stdin cpio!")?;
     std::thread::spawn(move || {
         for path in paths {
@@ -94,7 +94,7 @@ fn pack_initramfs_with_progress(temp_ramdisk: &Path, output_img: &Path) -> Resul
     Ok(())
 }
 
-fn compile_init_template(rootfs: &Path, target_init_bin: &Path, is_iso: bool) -> Result<(), String> {
+fn compile_init_template(rootfs: &Path, target_init_bin: &Path) -> Result<(), String> {
     info("Compiling /etc/lkinit.d/init.rs....");
     let template_in_rootfs = rootfs.join("etc/lkinit.d/init.rs");
     let template_path = if template_in_rootfs.exists() {
@@ -105,39 +105,36 @@ fn compile_init_template(rootfs: &Path, target_init_bin: &Path, is_iso: bool) ->
     if !template_path.exists() {
         return Err(format!("CRITICAL: Init template not found at {}!", template_path.display()));
     }
-    let raw_source = fs::read_to_string(&template_path)
-        .map_err(|e| format!("Failed to read init template: {}", e))?;
-    let injected_source = format!("pub const IS_ISO: bool = {};\n{}", is_iso, raw_source);
-    let build_dir = PathBuf::from("/tmp/lkinit-build");
+    let build_dir = PathBuf::from("/tmp/lkinit");
     fs::remove_dir_all(&build_dir).ok();
     fs::create_dir_all(build_dir.join("src")).map_err(|e| e.to_string())?;
-    fs::write(build_dir.join("src/main.rs"), injected_source)
-        .map_err(|e| format!("Failed to write injected init source: {}", e))?;
-    let cargo_toml = 
-        r#"[package]\n\
-           name = "init"\n\
-           version = "1.0.0"\n\
-           edition = "2024"\n\
-           \n\
-           [dependencies]\n\
-           colored = "2.1"\n\
-           nix = { version = "0.28", features = ["mount", "fs", "process", "term"] }\n\
-           anyhow = "1.0"\n\
-          "#;
+    fs::copy(&template_path, build_dir.join("src/main.rs"))
+    .map_err(|e| format!("Failed to copy init.rs template: {}", e))?;
+    let cargo_toml =
+    r#"[package]
+    name = "init"
+    version = "1.0.0"
+    edition = "2024"
+
+    [dependencies]
+    colored = "3.1.1"
+    nix = { version = "0.31.3", features = ["mount", "fs", "process", "term", "user", "unistd"] }
+    anyhow = "1.0"
+    "#;
     fs::write(build_dir.join("Cargo.toml"), cargo_toml)
-        .map_err(|e| format!("Failed to write temporary Cargo.toml for init: {}", e))?;
+    .map_err(|e| format!("Failed to write temporary Cargo.toml for init: {}", e))?;
     let musl_target = "x86_64-unknown-linux-musl";
     let cargo_musl = Command::new("cargo")
-        .args(&["build", "--manifest-path", "/tmp/lkinit-build/Cargo.toml", "--target", musl_target, "--release"])
-        .status();
+    .args(&["build", "--manifest-path", "/tmp/lkinit-build/Cargo.toml", "--target", musl_target, "--release"])
+    .status();
     let compiled_binary = match cargo_musl {
         Ok(s) if s.success() => build_dir.join(format!("target/{}/release/init", musl_target)),
         _ => {
             info("Musl target unavailable! Compiling with default host release target....");
             let cargo_default = Command::new("cargo")
-                .args(&["build", "--manifest-path", "/tmp/lkinit-build/Cargo.toml", "--release"])
-                .status()
-                .map_err(|e| format!("Cargo compilation error: {}", e))?;
+            .args(&["build", "--manifest-path", "/tmp/lkinit-build/Cargo.toml", "--release"])
+            .status()
+            .map_err(|e| format!("Cargo compilation error: {}", e))?;
             if !cargo_default.success() {
                 return Err("Failed to compile /etc/lkinit.d/init.rs!".into());
             }
@@ -145,13 +142,13 @@ fn compile_init_template(rootfs: &Path, target_init_bin: &Path, is_iso: bool) ->
         }
     };
     fs::copy(&compiled_binary, target_init_bin)
-        .map_err(|e| format!("Failed to copy compiled binary to init: {}", e))?;
+    .map_err(|e| format!("Failed to copy compiled binary to init: {}", e))?;
     fs::remove_dir_all(&build_dir).ok();
     Ok(())
 }
 
-pub fn generate_liska_initramfs(rootfs: &Path, output_img: &Path, is_iso: bool) -> Result<(), String> {
-    info(&format!("Generating {} initramfs....", if is_iso { "iso" } else { "system" }));
+pub fn generate_liska_initramfs(rootfs: &Path, output_img: &Path) -> Result<(), String> {
+    info("Starting to generate initramfs-liska.img....");
     let rootfs_mod_dir = rootfs.join("usr/lib/modules");
     let mut kernel_version = String::new();
     if rootfs_mod_dir.exists() {
@@ -207,7 +204,7 @@ pub fn generate_liska_initramfs(rootfs: &Path, output_img: &Path, is_iso: bool) 
         }
     }
     let init_path = temp_ramdisk.join("init");
-    compile_init_template(rootfs, &init_path, is_iso)?;
+    compile_init_template(rootfs, &init_path)?;
     run_command("chmod", &["+x", init_path.to_str().unwrap()])?;
     if let Some(parent) = output_img.parent() {
         fs::create_dir_all(parent).ok();
@@ -229,7 +226,6 @@ fn main() {
         println!("Usage: lkinit <command> [target (optional for --root and --output)]");
         println!("> --root <path>            specify the root filesystem path (default: /)");
         println!("> --output <path>          specify the output initramfs image path (default: /boot/initramfs-liska.img)");
-        println!("> --iso                    generate initramfs for ISO filesystem");
         println!("> /etc/lkinit.d/init.rs    default init template path");
         println!("");
         exit(0);
@@ -237,7 +233,6 @@ fn main() {
     require_root();
     let mut rootfs = PathBuf::from("/");
     let mut output = PathBuf::from("/boot/initramfs-liska.img");
-    let mut is_iso = false;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -247,14 +242,11 @@ fn main() {
             "--output" => {
                 if i + 1 < args.len() { output = PathBuf::from(&args[i + 1]); i += 1; }
             }
-            "--iso" => {
-                is_iso = true;
-            }
             _ => {}
         }
         i += 1;
     }
-    if let Err(e) = generate_liska_initramfs(&rootfs, &output, is_iso) {
+    if let Err(e) = generate_liska_initramfs(&rootfs, &output) {
         error(&format!("CRITICAL: {}", e));
         exit(1);
     }
