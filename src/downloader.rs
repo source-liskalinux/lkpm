@@ -85,14 +85,14 @@ pub fn download_packages_concurrently(
     }
     let mp = Arc::new(MultiProgress::new());
     let pb_style = ProgressStyle::default_bar()
-        .template("{spinner:.bright.green} {bar:50.bright.cyan/blue} {percent:>3}% [ {bytes:>10}/{total_bytes:>10} ] {msg}")
+        .template("{spinner:.bright.green} {bar:50.bright.cyan/blue} {percent:>3}% [ {bytes:>10} | {total_bytes:>10} | {eta_precise} ] {msg}")
         .unwrap()
         .progress_chars("▓▒░")
         .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏");
     let overall_pb = mp.add(ProgressBar::new(total as u64));
     overall_pb.set_style(
         ProgressStyle::default_bar()
-            .template("\n{spinner:.bright.green} {bar:50.bright.cyan/blue} {percent:>3}% [ {bytes:>10} | {binary_bytes_per_sec:>12} ] ({pos}/{len}) total packages")
+            .template("\n{spinner:.bright.green} {percent:>3}% [ {bytes:>10} | {binary_bytes_per_sec:>12} ] {len} total packages")
             .unwrap()
             .progress_chars("▓▒░")
             .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
