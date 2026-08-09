@@ -22,6 +22,7 @@ pub fn download_to(
     url: &str,
     dest: &Path,
     pb: Option<&ProgressBar>,
+    overall_pb: Option<&ProgressBar>,
 ) -> anyhow::Result<PathBuf> {
     let client = http_client()?;
     let mut attempt = 0;
@@ -46,7 +47,6 @@ pub fn download_to(
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(0);
-
     if let Some(pb) = pb {
         if total_size > 0 {
             pb.set_length(total_size);
@@ -60,9 +60,13 @@ pub fn download_to(
         if n == 0 {
             break;
         }
-        out.write_all(&buf[..n])?;
+        out.write_all(&buf[..n])?; 
+        let downloaded = n as u64;
         if let Some(pb) = pb {
-            pb.inc(n as u64);
+            pb.inc(downloaded);
+        }
+        if let Some(opb) = overall_pb {
+            opb.inc(downloaded);
         }
     }
     if let Some(pb) = pb {
@@ -85,10 +89,10 @@ pub fn download_packages_concurrently(
         .unwrap()
         .progress_chars("▓▒░")
         .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏");
-    let overall_pb = mp.add(ProgressBar::new(total as u64));
+    let overall_pb = mp.add(ProgressBar::new_spinner());
     overall_pb.set_style(
         ProgressStyle::default_bar()
-            .template("\n{spinner:.bright.green} ( {pos}/{len} ) {bar:50.bright.cyan/blue} {percent:>3}% [ {bytes:>10}/{total_bytes:>10} ] total packages")
+            .template("\n{spinner:.bright.green} {bar:50.bright.cyan/blue} {percent:>3}% [ {bytes:>10} | {binary_bytes_per_sec:>12} ] ({pos}/{len}) total packages")
             .unwrap()
             .progress_chars("▓▒░")
             .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
@@ -122,7 +126,12 @@ pub fn download_packages_concurrently(
                 let pb = mp_clone.insert_before(&overall_pb_clone, ProgressBar::new(0));
                 pb.set_style(style_clone.clone());
                 pb.set_message(pkg_name);
-                let res = repo::download_pkg_url(&cfg_clone, &url, Some(pb.clone()));
+                let res = repo::download_pkg_url(
+                    &cfg_clone, 
+                    &url, 
+                    Some(pb.clone()), 
+                    Some(overall_pb_clone.clone())
+                );
                 pb.finish_and_clear();
                 mp_clone.remove(&pb);
                 overall_pb_clone.inc(1);
