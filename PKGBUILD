@@ -17,7 +17,7 @@ depends=(
 )
 optdepends=(
     'git' 'make' 'gcc' 'clang' 'python' 'perl' 'ruby' 'nodejs'
-    'npm' 'yarn' 'go' 'rust'
+    'npm' 'yarn' 'go'
 )
 makedepends=('rust' 'pkgconf' 'sqlite')
 
