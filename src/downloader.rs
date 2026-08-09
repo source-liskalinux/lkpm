@@ -89,7 +89,7 @@ pub fn download_packages_concurrently(
         .unwrap()
         .progress_chars("▓▒░")
         .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏");
-    let overall_pb = mp.add(ProgressBar::new_spinner());
+    let overall_pb = mp.add(ProgressStyle::default_bar());
     overall_pb.set_style(
         ProgressStyle::default_bar()
             .template("\n{spinner:.bright.green} {bar:50.bright.cyan/blue} {percent:>3}% [ {bytes:>10} | {binary_bytes_per_sec:>12} ] ({pos}/{len}) total packages")
