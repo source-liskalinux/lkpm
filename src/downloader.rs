@@ -137,7 +137,7 @@ pub fn download_packages_concurrently(
     for (index, res) in rx {
         match res {
             Ok(path) => results[index] = Some(path),
-            Err() => {
+            Err(..) => {
                 continue;
             }
         }
