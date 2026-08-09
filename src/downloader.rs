@@ -10,7 +10,6 @@ use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use crate::config::Config;
 use crate::error::LkpmError;
 use crate::repo;
-use crate::ui;
 
 fn http_client() -> anyhow::Result<Client> {
     Ok(Client::builder()
@@ -138,7 +137,7 @@ pub fn download_packages_concurrently(
     for (index, res) in rx {
         match res {
             Ok(path) => results[index] = Some(path),
-            Err(e) => {
+            Err() => {
                 continue;
             }
         }
