@@ -81,10 +81,15 @@ pub fn download_packages_concurrently(
         return Ok(Vec::new());
     }
     let mp = Arc::new(MultiProgress::new());
+    let pb_style = ProgressStyle::default_bar()
+        .template("{spinner:.bright.green} {bar:50.bright.cyan/blue} {percent:>3}% [ {bytes:>10}/{total_bytes:>10} ] {msg}")
+        .unwrap()
+        .progress_chars("▓▒░")
+        .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏");
     let overall_pb = mp.add(ProgressBar::new(total as u64));
     overall_pb.set_style(
         ProgressStyle::default_bar()
-            .template("{spinner:.bright.green} {percent:>3}% [{pos}/{len}] package downloaded")
+            .template("\n{spinner:.bright.green} ( {pos}/{len} ) {bar:50.bright.cyan/blue} {percent:>3}% [ {bytes:>10}/{total_bytes:>10} ] total packages")
             .unwrap()
             .progress_chars("▓▒░")
             .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
@@ -102,6 +107,7 @@ pub fn download_packages_concurrently(
         let cfg_clone = cfg.clone();
         let mp_clone = Arc::clone(&mp);
         let overall_pb_clone = overall_pb.clone();
+        let style_clone = pb_style.clone();
         std::thread::spawn(move || {
             loop {
                 let task = {
@@ -114,16 +120,12 @@ pub fn download_packages_concurrently(
                 };
                 let file_name = repo::package_file_name_from_url(&url);
                 let pkg_name = repo::package_name_from_file_name(&file_name);
-                let pb = mp_clone.add(ProgressBar::new(0));
-                pb.set_style(
-                    ProgressStyle::default_bar()
-                        .template("{spinner:.bright.green} {bar:40.bright.cyan/blue} {percent:>3}% [{bytes:>10}/{total_bytes:>10}] {msg}")
-                        .unwrap()
-                        .progress_chars("▓▒░")
-                        .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
-                );
+                let pb = mp_clone.insert_before(&overall_pb_clone, ProgressBar::new(0));
+                pb.set_style(style_clone.clone());
                 pb.set_message(pkg_name);
-                let res = repo::download_pkg_url(&cfg_clone, &url, Some(pb));
+                let res = repo::download_pkg_url(&cfg_clone, &url, Some(pb.clone()));
+                pb.finish_and_clear();
+                mp_clone.remove(&pb);
                 overall_pb_clone.inc(1);
                 if tx_clone.send((index, res)).is_err() {
                     break;
@@ -137,10 +139,11 @@ pub fn download_packages_concurrently(
         match res {
             Ok(path) => results[index] = Some(path),
             Err(e) => {
-                ui::warning(&format!("Failed to download {}! Skipping.... (Error: {})", index, e));
+                continue;
             }
         }
     }
     overall_pb.finish_and_clear();
+    mp.clear().ok();
     Ok(results)
 }
