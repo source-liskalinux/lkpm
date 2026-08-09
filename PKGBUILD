@@ -44,6 +44,9 @@ package() {
     if [ -f "./etc/lkinit.d/init.rs" ]; then
         install -Dm644 "./etc/lkinit.d/init.rs" "${pkgdir}/etc/lkinit.d/init.rs"
     fi
+    if [ -f "./etc/lkinit.d/Cargo.toml" ]; then
+        install -Dm644 "./etc/lkinit.d/Cargo.toml" "${pkgdir}/etc/lkinit.d/Cargo.toml"
+    fi
     echo "--> [PACKAGE] Installing lkchroot...."
     install -Dm755 "./target/release/lkchroot" "${pkgdir}/usr/bin/lkchroot"
 }
