@@ -117,24 +117,14 @@ fn compile_init_template(rootfs: &Path, target_init_bin: &Path) -> Result<(), St
         .map_err(|e| format!("Failed to copy init.rs template: {}", e))?;
     fs::copy(&cargo_path, build_dir.join("Cargo.toml"))
         .map_err(|e| format!("Failed to copy Cargo.toml template: {}", e))?;
-    let musl_target = "x86_64-unknown-linux-musl";
-    let cargo_musl = Command::new("cargo")
-    .args(&["build", "--manifest-path", "/tmp/lkinit/Cargo.toml", "--target", musl_target, "--release"])
-    .status();
-    let compiled_binary = match cargo_musl {
-        Ok(s) if s.success() => build_dir.join(format!("target/{}/release/init", musl_target)),
-        _ => {
-            info("Musl target unavailable! Compiling with default host release target....");
-            let cargo_default = Command::new("cargo")
-            .args(&["build", "--manifest-path", "/tmp/lkinit/Cargo.toml", "--release"])
-            .status()
-            .map_err(|e| format!("Cargo compilation error: {}", e))?;
-            if !cargo_default.success() {
-                return Err("Failed to compile /etc/lkinit.d/init.rs!".into());
-            }
-            build_dir.join("target/release/init")
-        }
-    };
+    let cargo_default = Command::new("cargo")
+        .args(&["build", "--manifest-path", "/tmp/lkinit/Cargo.toml", "--release"])
+        .status()
+        .map_err(|e| format!("Cargo compilation error: {}", e))?;
+    if !cargo_default.success() {
+        return Err("Failed to compile /etc/lkinit.d/init.rs!".into());
+    }
+    let compiled_binary = build_dir.join("target/release/init");
     fs::copy(&compiled_binary, target_init_bin)
     .map_err(|e| format!("Failed to copy compiled binary to init: {}", e))?;
     fs::remove_dir_all(&build_dir).ok();
