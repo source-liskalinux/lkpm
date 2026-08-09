@@ -125,14 +125,14 @@ fn compile_init_template(rootfs: &Path, target_init_bin: &Path) -> Result<(), St
     .map_err(|e| format!("Failed to write temporary Cargo.toml for init: {}", e))?;
     let musl_target = "x86_64-unknown-linux-musl";
     let cargo_musl = Command::new("cargo")
-    .args(&["build", "--manifest-path", "/tmp/lkinit-build/Cargo.toml", "--target", musl_target, "--release"])
+    .args(&["build", "--manifest-path", "/tmp/lkinit/Cargo.toml", "--target", musl_target, "--release"])
     .status();
     let compiled_binary = match cargo_musl {
         Ok(s) if s.success() => build_dir.join(format!("target/{}/release/init", musl_target)),
         _ => {
             info("Musl target unavailable! Compiling with default host release target....");
             let cargo_default = Command::new("cargo")
-            .args(&["build", "--manifest-path", "/tmp/lkinit-build/Cargo.toml", "--release"])
+            .args(&["build", "--manifest-path", "/tmp/lkinit/Cargo.toml", "--release"])
             .status()
             .map_err(|e| format!("Cargo compilation error: {}", e))?;
             if !cargo_default.success() {
@@ -162,7 +162,7 @@ pub fn generate_liska_initramfs(rootfs: &Path, output_img: &Path) -> Result<(), 
         }
     }
     if kernel_version.is_empty() {
-        return Err("FATAL: kernel version not found in /usr/lib/modules!".into());
+        return Err("FATAL: kernel version not found!".into());
     }
     let temp_ramdisk = PathBuf::from("/tmp/lkinit-ramdisk");
     fs::remove_dir_all(&temp_ramdisk).ok();
