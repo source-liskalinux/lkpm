@@ -15,7 +15,7 @@ use crate::ui;
 fn http_client() -> anyhow::Result<Client> {
     Ok(Client::builder()
         .user_agent("lkpm/1.1.0-1")
-        .connect_timeout(Duration::from_secs(15))
+        .connect_timeout(Duration::from_secs(90))
         .build()?)
 }
 
