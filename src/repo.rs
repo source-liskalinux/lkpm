@@ -443,6 +443,6 @@ pub fn download_pkg_url(
     let file_name = package_file_name_from_url(url);
     let local = cfg.cache_path.join(&file_name);
     fs::create_dir_all(&cfg.cache_path).map_err(LkpmError::Io)?;
-    downloader::download_to(url, &local, pb.as_ref(), overall_pb.as_ref())
+    download_to(url, &local, pb.as_ref(), overall_pb.as_ref())
         .map_err(|e| LkpmError::Network(e.to_string()))
 }
