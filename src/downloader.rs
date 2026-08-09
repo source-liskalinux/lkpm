@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use reqwest::blocking::Client;
 use std::collections::VecDeque;
-use std::fs::File;
+use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
@@ -15,7 +15,7 @@ fn http_client() -> anyhow::Result<Client> {
     Ok(Client::builder()
         .user_agent("lkpm/1.1.0-1")
         .connect_timeout(Duration::from_secs(30))
-        .read_timeout(Duration::from_secs(300))
+        .timeout(Duration::from_secs(300))
         .pool_idle_timeout(Duration::from_secs(90))
         .build()?)
 }
