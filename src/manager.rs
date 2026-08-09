@@ -176,10 +176,6 @@ fn topological_install_order_from_planned(
                 .min_by_key(|&(_, &deg)| deg)
                 .map(|(node, _)| node.clone());
             if let Some(node) = next_node {
-                ui::warning(&format!(
-                    "Cyclic dependency detected involving '{}'. Breaking cycle automatically...",
-                    node
-                ));
                 in_degree.insert(node.clone(), 0);
                 queue.push_back(node);
             } else {
@@ -511,8 +507,7 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
                     validate_package_metadata(&cfg, &metadata)?;
                     prepared.push(PreparedInstall { target, path, metadata });
                 } else {
-                    let missing_pkg = target.requested_name.as_deref().unwrap_or(&target.source);
-                    ui::warning(&format!("Skipping {} because failed to download it from the repository!", missing_pkg));
+                    continue;
                 }
             }
             ui::info(&format!(
@@ -811,7 +806,7 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
                     validate_package_metadata(&cfg, &metadata)?;
                     prepared_updates.push((target, path, metadata, size));
                 } else {
-                    ui::warning(&format!("Skipping update for {} because not found in the repository!", target.record.name));
+                    continue;
                 }
             }
             ui::info(&format!(
