@@ -110,7 +110,9 @@ fn download_once(
     out.flush()?;
     if total_size > 0 && downloaded_bytes != total_size {
         if let Some(opb) = overall_pb {
-            opb.dec(downloaded_bytes);
+            if downloaded_bytes > 0 {
+                opb.dec(downloaded_bytes);
+            }
         }
         anyhow::bail!(
             "Downloaded file size not matched with the actual file size! ({}/{} bytes)",
@@ -138,9 +140,8 @@ pub fn download_packages_concurrently(
     let overall_pb = mp.add(ProgressBar::new(total as u64));
     overall_pb.set_style(
         ProgressStyle::default_bar()
-            .template("\n{spinner:.bright.green} {percent:>3}% [ {bytes:>10} | {binary_bytes_per_sec:>12} ] {len} total packages")
+            .template("\n{spinner:.bright.green} [ {bytes:>10} | {binary_bytes_per_sec:>12} ] {len} total packages")
             .unwrap()
-            .progress_chars("▓▒░")
             .tick_chars("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
     );
     overall_pb.enable_steady_tick(Duration::from_millis(80));
