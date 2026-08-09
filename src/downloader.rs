@@ -14,7 +14,9 @@ use crate::repo;
 fn http_client() -> anyhow::Result<Client> {
     Ok(Client::builder()
         .user_agent("lkpm/1.1.0-1")
-        .connect_timeout(Duration::from_secs(90))
+        .connect_timeout(Duration::from_secs(30))
+        .read_timeout(Duration::from_secs(300))
+        .pool_idle_timeout(Duration::from_secs(90))
         .build()?)
 }
 
@@ -25,21 +27,47 @@ pub fn download_to(
     overall_pb: Option<&ProgressBar>,
 ) -> anyhow::Result<PathBuf> {
     let client = http_client()?;
-    let mut attempt = 0;
-    let resp = loop {
-        attempt += 1;
-        match client.get(url).send() {
-            Ok(resp) => break resp,
-            Err(err) => {
-                if attempt >= 3 || !(err.is_timeout() || err.is_connect() || err.is_request()) {
-                    return Err(err).with_context(|| format!("Failed sending request to {url}!"));
+    let max_attempts = 3;
+    let mut last_error: Option<anyhow::Error> = None;
+    for attempt in 1..=max_attempts {
+        if attempt > 1 {
+            if let Some(pb) = pb {
+                pb.set_position(0);
+            }
+            std::thread::sleep(Duration::from_secs(2));
+        }
+        match download_once(&client, url, dest, pb, overall_pb) {
+            Ok(path) => {
+                if let Some(pb) = pb {
+                    pb.finish_and_clear();
                 }
-                std::thread::sleep(Duration::from_secs(1));
+                return Ok(path);
+            }
+            Err(err) => {
+                if dest.exists() {
+                    let _ = fs::remove_file(dest);
+                }
+                last_error = Some(err);
             }
         }
-    };
+    }
+    if let Some(pb) = pb {
+        pb.finish_and_clear();
+    }
+    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("Failed to download after {} attemps!", max_attempts)))
+        .with_context(|| format!("Failed to download from {url}!"))
+}
+
+fn download_once(
+    client: &Client,
+    url: &str,
+    dest: &Path,
+    pb: Option<&ProgressBar>,
+    overall_pb: Option<&ProgressBar>,
+) -> anyhow::Result<PathBuf> {
+    let resp = client.get(url).send().with_context(|| format!("Failed to send request to {url}!"))?;
     if !resp.status().is_success() {
-        anyhow::bail!("HTTP error: {}", resp.status());
+        anyhow::bail!("HTTP error status: {}", resp.status());
     }
     let total_size = resp
         .headers()
@@ -52,25 +80,43 @@ pub fn download_to(
             pb.set_length(total_size);
         }
     }
-    let mut out = File::create(dest).with_context(|| format!("Failed to create {}!", dest.display()))?;
+    let mut out = File::create(dest).with_context(|| format!("Failed to create {} file!", dest.display()))?;
     let mut source = resp;
+    let mut downloaded_bytes: u64 = 0;
     let mut buf = [0u8; 64 * 1024];
     loop {
-        let n = source.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        out.write_all(&buf[..n])?; 
-        let downloaded = n as u64;
+        let n = match source.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) => {
+                if let Some(opb) = overall_pb {
+                    if downloaded_bytes > 0 {
+                        opb.dec(downloaded_bytes);
+                    }
+                }
+                return Err(anyhow::Error::from(e)).context("Connection disconnected when trying to download the data!");
+            }
+        };
+        out.write_all(&buf[..n])?;
+        let chunk_size = n as u64;
+        downloaded_bytes += chunk_size;
         if let Some(pb) = pb {
-            pb.inc(downloaded);
+            pb.inc(chunk_size);
         }
         if let Some(opb) = overall_pb {
-            opb.inc(downloaded);
+            opb.inc(chunk_size);
         }
     }
-    if let Some(pb) = pb {
-        pb.finish_and_clear();
+    out.flush()?;
+    if total_size > 0 && downloaded_bytes != total_size {
+        if let Some(opb) = overall_pb {
+            opb.dec(downloaded_bytes);
+        }
+        anyhow::bail!(
+            "Downloaded file size not matched with the actual file size! ({}/{} bytes)",
+            downloaded_bytes,
+            total_size
+        );
     }
     Ok(dest.to_path_buf())
 }
