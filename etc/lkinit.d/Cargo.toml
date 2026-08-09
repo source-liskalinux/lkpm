@@ -1,0 +1,9 @@
+[package]
+name = "init"
+version = "1.0.0"
+edition = "2024"
+
+[dependencies]
+colored = "3.1.1"
+nix = { version = "0.31.3", features = ["mount", "fs", "process", "term", "user", "unistd"] }
+anyhow = "1.0"
