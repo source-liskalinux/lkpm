@@ -96,33 +96,27 @@ fn pack_initramfs_with_progress(temp_ramdisk: &Path, output_img: &Path) -> Resul
 
 fn compile_init_template(rootfs: &Path, target_init_bin: &Path) -> Result<(), String> {
     info("Compiling /etc/lkinit.d/init.rs....");
-    let template_in_rootfs = rootfs.join("etc/lkinit.d/init.rs");
-    let template_path = if template_in_rootfs.exists() {
-        template_in_rootfs
+    let template_rootfs = rootfs.join("etc/lkinit.d/init.rs");
+    let cargo_rootfs = rootfs.join("etc/lkinit.d/Cargo.toml");
+    let (template_path, cargo_path) = if template_rootfs.exists() && cargo_rootfs.exists() {
+        (template_rootfs, cargo_rootfs)
     } else {
-        PathBuf::from("/etc/lkinit.d/init.rs")
+        (
+            PathBuf::from("/etc/lkinit.d/init.rs"),
+            PathBuf::from("/etc/lkinit.d/Cargo.toml"),
+        )
     };
-    if !template_path.exists() {
-        return Err(format!("CRITICAL: Init template not found at {}!", template_path.display()));
+
+    if !template_path.exists() || !cargo_path.exists() {
+        return Err("CRITICAL: Init template (init.rs) or Cargo.toml not found!".into());
     }
     let build_dir = PathBuf::from("/tmp/lkinit");
     fs::remove_dir_all(&build_dir).ok();
     fs::create_dir_all(build_dir.join("src")).map_err(|e| e.to_string())?;
     fs::copy(&template_path, build_dir.join("src/main.rs"))
-    .map_err(|e| format!("Failed to copy init.rs template: {}", e))?;
-    let cargo_toml =
-    r#"[package]
-    name = "init"
-    version = "1.0.0"
-    edition = "2024"
-
-    [dependencies]
-    colored = "3.1.1"
-    nix = { version = "0.31.3", features = ["mount", "fs", "process", "term", "user", "unistd"] }
-    anyhow = "1.0"
-    "#;
-    fs::write(build_dir.join("Cargo.toml"), cargo_toml)
-    .map_err(|e| format!("Failed to write temporary Cargo.toml for init: {}", e))?;
+        .map_err(|e| format!("Failed to copy init.rs template: {}", e))?;
+    fs::copy(&cargo_path, build_dir.join("Cargo.toml"))
+        .map_err(|e| format!("Failed to copy Cargo.toml template: {}", e))?;
     let musl_target = "x86_64-unknown-linux-musl";
     let cargo_musl = Command::new("cargo")
     .args(&["build", "--manifest-path", "/tmp/lkinit/Cargo.toml", "--target", musl_target, "--release"])
