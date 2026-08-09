@@ -5,5 +5,5 @@ edition = "2024"
 
 [dependencies]
 colored = "3.1.1"
-nix = { version = "0.31.3", features = ["mount", "fs", "process", "term", "user", "unistd"] }
+nix = { version = "0.31.3", features = ["mount", "fs", "process", "term", "user"] }
 anyhow = "1.0"
