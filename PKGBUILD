@@ -22,6 +22,7 @@ optdepends=(
 makedepends=('rust' 'pkgconf' 'sqlite')
 
 build() {
+    unset LDFLAGS
     echo "--> [BUILD] Compiling lkpm, lkmake, lkinit, and lkchroot...."
     cargo build --release
 }
