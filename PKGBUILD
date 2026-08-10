@@ -12,7 +12,7 @@ url="https://github.com/source-liskalinux/lkpm"
 license=('GPL-3.0-or-later')
 depends=(
     'ca-certificates' 'sqlite' 'zstd' 'xz' 'busybox' 'cpio' 'kmod' 'bash'
-    'curl' 'tar' 'coreutils' 'bsdtar' 'fakeroot' 'gzip' 'bzip2' 'unzip'
+    'curl' 'tar' 'coreutils' 'fakeroot' 'gzip' 'bzip2' 'unzip'
     'p7zip' 'rust'
 )
 optdepends=(
