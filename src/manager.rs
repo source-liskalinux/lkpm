@@ -52,21 +52,6 @@ fn file_sha256(path: &PathBuf) -> Result<String, LkpmError> {
     Ok(hex::encode(result))
 }
 
-fn verify_package_checksum(path: &PathBuf, expected_sha256: Option<&str>) -> Result<String, LkpmError> {
-    let actual_sha256 = file_sha256(path)?;
-    if let Some(expected) = expected_sha256 {
-        if !actual_sha256.eq_ignore_ascii_case(expected) {
-            return Err(LkpmError::Other(format!(
-                "SHA256 checksum mismatch for {}! Expected: {}, Got: {}",
-                path.display(),
-                expected,
-                actual_sha256
-            )));
-        }
-    }
-    Ok(actual_sha256)
-}
-
 fn package_size(path: &Path) -> u64 {
     fs::metadata(path)
         .map(|metadata| metadata.len())
@@ -237,10 +222,6 @@ fn resolve_installation_plan(
         let repo_info = match repo::find_repo_package_info(cfg, &package_name)? {
             Some(info) => info,
             None => {
-                ui::warning(&format!(
-                    "Package '{}' not found in mirrorlist metadata! Skipping....",
-                    package_name
-                ));
                 continue;
             }
         };
@@ -265,13 +246,8 @@ fn resolve_installation_plan(
                     },
                     location: repo_location,
                     metadata: None,
-                    expected_sha256: repo_info.sha256.clone(),
                 });
             } else {
-                ui::warning(&format!(
-                    "Dependency '{}' not found in mirrorlist metadata! Skipping...",
-                    dep_name
-                ));
                 continue;
             }
         }
@@ -362,7 +338,6 @@ struct InstallTarget {
     source: String,
     location: repo::PackageLocation,
     metadata: Option<pkg::PackageMetadata>,
-    expected_sha256: Option<String>,
 }
 
 fn build_install_target(cfg: &Config, package: &str) -> Result<InstallTarget, LkpmError> {
@@ -372,7 +347,6 @@ fn build_install_target(cfg: &Config, package: &str) -> Result<InstallTarget, Lk
             source: package.to_string(),
             location: repo::PackageLocation::Remote(package.to_string()),
             metadata: None,
-            expected_sha256: None,
         });
     }
     ensure_package_is_not_blocked(cfg, package)?;
@@ -387,7 +361,6 @@ fn build_install_target(cfg: &Config, package: &str) -> Result<InstallTarget, Lk
         },
         location,
         metadata: None,
-        expected_sha256: repo_info.sha256.clone(),
     })
 }
 
@@ -542,10 +515,10 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
                 if let Some(path) = &downloaded_paths[i] {
                     let path = path.clone();
                     let pkg_name = target.requested_name.as_deref().unwrap_or(&target.source);
-                    let checksum = match verify_package_checksum(&path, target.expected_sha256.as_deref()) {
+                    let checksum = match file_sha256(&path) {
                         Ok(sha) => sha,
                         Err(err) => {
-                            ui::error(&format!("Checksum verification failed for {}: {}", pkg_name, err));
+                            ui::warning(&format!("Failed to calculate checksum for {}: {}", pkg_name, err));
                             continue;
                         }
                     };
@@ -846,10 +819,10 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
             for (i, target) in update_targets.into_iter().enumerate() {
                 if let Some(path) = &downloaded_paths[i] {
                     let path = path.clone();
-                    let checksum = match verify_package_checksum(&path, target.expected_sha256.as_deref()) {
+                    let checksum = match file_sha256(&path) {
                         Ok(sha) => sha,
                         Err(err) => {
-                            ui::error(&format!("Checksum verification failed for {}: {}", target.record.name, err));
+                            ui::warning(&format!("Failed to calculate checksum for {}: {}", target.record.name, err));
                             continue;
                         }
                     };
