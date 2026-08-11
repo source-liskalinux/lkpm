@@ -1,9 +1,16 @@
 [package]
 name = "init"
-version = "1.0.0"
+version = "0.1.0"
 edition = "2024"
+authors = ["Liska Linux Project"]
+description = "Early initramfs init program for Liska Linux"
 
 [dependencies]
-colored = "3.1.1"
-nix = { version = "0.31.3", features = ["mount", "fs", "process", "term", "user"] }
-anyhow = "1.0"
+# Add depedencies if needed
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
