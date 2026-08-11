@@ -454,6 +454,24 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
             require_root_for_install_root(&cfg)?;
             ui::start_operation("Starting the operation....");
             let duration = Instant::now();
+            ui::info("Refreshing repository metadata....");
+            fs::create_dir_all(&cfg.cache_path).map_err(LkpmError::Io)?;
+            let refreshed = repo::refresh_repo_metadata(&cfg)?;
+            if refreshed.is_empty() {
+                if cfg.core_repos.is_empty() && cfg.extra_mirrors.is_empty() {
+                    ui::error("No main repository that has been configured!");
+                } else {
+                    ui::warning("Repository metadata refresh completed but no metadata files were refreshed!");
+                }
+            } else {
+                ui::success("Repository metadata has been refreshed successfully!");
+            }
+            check_repository_connections(&cfg)?;
+            if refreshed.is_empty() {
+                ui::warning("Repository host is reachable but metadata cache could not be refreshed!");
+            } else {
+                ui::success("Repository metadata cache is ready.");
+            }
             let mut installs = Vec::new();
             for pkg_name in packages.iter() {
                 let target = build_install_target(&cfg, pkg_name)?;
