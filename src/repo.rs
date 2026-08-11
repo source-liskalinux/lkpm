@@ -85,6 +85,7 @@ fn file_name_from_href(href: &str) -> String {
 pub fn canonical_package_name(package: &str) -> &str {
     match package {
         "kernel" => "linux",
+        "linux-headers" => "linux",
         "sh" => "bash",
         "systemd" => "lksystem",
         "systemd-libs" => "elogind",
