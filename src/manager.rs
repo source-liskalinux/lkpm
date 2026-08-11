@@ -139,6 +139,7 @@ struct PreparedInstall {
     target: InstallTarget,
     path: PathBuf,
     metadata: pkg::PackageMetadata,
+    checksum: String,
 }
 
 fn topological_install_order_from_planned(
@@ -361,7 +362,7 @@ struct InstallTarget {
     source: String,
     location: repo::PackageLocation,
     metadata: Option<pkg::PackageMetadata>,
-    expected_sha256: String,
+    expected_sha256: Option<String>,
 }
 
 fn build_install_target(cfg: &Config, package: &str) -> Result<InstallTarget, LkpmError> {
@@ -386,7 +387,7 @@ fn build_install_target(cfg: &Config, package: &str) -> Result<InstallTarget, Lk
         },
         location,
         metadata: None,
-        expected_sha256: None,
+        expected_sha256: repo_info.sha256.clone(),
     })
 }
 
