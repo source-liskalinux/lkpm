@@ -181,6 +181,8 @@ pub fn generate_liska_initramfs(rootfs: &Path, output_img: &Path) -> Result<(), 
     let liska_libs = &[
         ("usr/lib/ld-linux-x86-64.so.2", "lib64/ld-linux-x86-64.so.2"),
         ("usr/lib/libc.so.6", "lib/libc.so.6"),
+        ("usr/lib/libm.so.6", "lib/libm.so.6"),
+        ("usr/lib/libresolv.so.2", "lib/libresolv.so.2"),
     ];
     for (src_lib, dst_lib) in liska_libs {
         let rootfs_lib_path = rootfs.join(src_lib);
