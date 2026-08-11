@@ -759,7 +759,6 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
                 record: InstalledPackage,
                 location: repo::PackageLocation,
                 remote_version: String,
-                expected_sha256: Option<String>,
             }
             let mut update_targets = Vec::new();
             for record in installed_packages.into_iter() {
