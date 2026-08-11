@@ -52,6 +52,21 @@ fn file_sha256(path: &PathBuf) -> Result<String, LkpmError> {
     Ok(hex::encode(result))
 }
 
+fn verify_package_checksum(path: &PathBuf, expected_sha256: Option<&str>) -> Result<String, LkpmError> {
+    let actual_sha256 = file_sha256(path)?;
+    if let Some(expected) = expected_sha256 {
+        if !actual_sha256.eq_ignore_ascii_case(expected) {
+            return Err(LkpmError::Other(format!(
+                "SHA256 checksum mismatch for {}! Expected: {}, Got: {}",
+                path.display(),
+                expected,
+                actual_sha256
+            )));
+        }
+    }
+    Ok(actual_sha256)
+}
+
 fn package_size(path: &Path) -> u64 {
     fs::metadata(path)
         .map(|metadata| metadata.len())
@@ -249,6 +264,7 @@ fn resolve_installation_plan(
                     },
                     location: repo_location,
                     metadata: None,
+                    expected_sha256: repo_info.sha256.clone(),
                 });
             } else {
                 ui::warning(&format!(
@@ -345,6 +361,7 @@ struct InstallTarget {
     source: String,
     location: repo::PackageLocation,
     metadata: Option<pkg::PackageMetadata>,
+    expected_sha256: Option<String>,
 }
 
 fn build_install_target(cfg: &Config, package: &str) -> Result<InstallTarget, LkpmError> {
@@ -368,6 +385,7 @@ fn build_install_target(cfg: &Config, package: &str) -> Result<InstallTarget, Lk
         },
         location,
         metadata: None,
+        expected_sha256: repo_info.sha256.clone(),
     })
 }
 
@@ -503,9 +521,16 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
             for (i, target) in plan_targets.into_iter().enumerate() {
                 if let Some(path) = &downloaded_paths[i] {
                     let path = path.clone();
+                    let checksum = match verify_package_checksum(&path, target.expected_sha256.as_deref()) {
+                        Ok(sha) => sha,
+                        Err(err) => {
+                            ui::error(&format!("Checksum verification failed for {}: {}", target, err));
+                            continue;
+                        }
+                    };
                     let metadata = pkg::read_package_metadata(&path)?;
                     validate_package_metadata(&cfg, &metadata)?;
-                    prepared.push(PreparedInstall { target, path, metadata });
+                    prepared.push(PreparedInstall { target, path, metadata, verified_checksum });
                 } else {
                     continue;
                 }
@@ -520,6 +545,7 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
                 let target = prepared.target.clone();
                 let path = prepared.path.clone();
                 let metadata = prepared.metadata.clone();
+                let checksum = prepared.checksum.clone();
                 ui::info(&format!(
                     "Installing {} ({})....",
                     metadata.name.bright_yellow(),
@@ -530,10 +556,6 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
                 match install_result {
                     Ok(files) => {
                         let size = package_size(&path);
-                        let checksum = match pkg::package_buildinfo_sha256(&path)? {
-                            Some(hash) => hash,
-                            None => file_sha256(&path)?,
-                        };
                         let package_path = path.clone();
                         db.register(
                             &cfg,
@@ -743,6 +765,7 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
                 record: InstalledPackage,
                 location: repo::PackageLocation,
                 remote_version: String,
+                expected_sha256: Option<String>,
             }
             let mut update_targets = Vec::new();
             for record in installed_packages.into_iter() {
@@ -756,6 +779,7 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
                                 record,
                                 location,
                                 remote_version: repo_pkg.version,
+                                expected_sha256: repo_pkg.sha256.clone(),
                             });
                         }
                     }
@@ -801,10 +825,17 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
             for (i, target) in update_targets.into_iter().enumerate() {
                 if let Some(path) = &downloaded_paths[i] {
                     let path = path.clone();
+                    let checksum = match verify_package_checksum(&path, target.expected_sha256.as_deref()) {
+                        Ok(sha) => sha,
+                        Err(err) => {
+                            ui::error(&format!("Checksum verification failed for {}: {}", target, err));
+                            continue;
+                        }
+                    };
                     let metadata = pkg::read_package_metadata(&path)?;
                     let size = package_size(&path);
                     validate_package_metadata(&cfg, &metadata)?;
-                    prepared_updates.push((target, path, metadata, size));
+                    prepared_updates.push((target, path, metadata, size, checksum));
                 } else {
                     continue;
                 }
@@ -815,7 +846,7 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
                 prepared_updates.len(),
                 "updated package(s) to system:".bright_cyan()
             ));
-            for (target, path, metadata, size) in prepared_updates.into_iter() {
+            for (target, path, metadata, size, checksum) in prepared_updates.into_iter() {
                 ui::info(&format!(
                     "Updating {} (v{} -> v{})...",
                     target.record.name.bright_yellow(),
@@ -824,13 +855,8 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
                 ));
                 let install_result: Result<Vec<PathBuf>, LkpmError> =
                     pkg::install_package(&path, &cfg.install_root, None).map_err(LkpmError::from);
-                let mut checksum = String::new();
                 let status = match install_result {
                     Ok(installed_files) => {
-                        checksum = match pkg::package_buildinfo_sha256(&path)? {
-                            Some(hash) => hash,
-                            None => file_sha256(&path)?,
-                        };
                         let mut updated = target.record.clone();
                         updated.package_path = path.clone();
                         updated.version = metadata.version.clone();
