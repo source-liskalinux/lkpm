@@ -84,7 +84,7 @@ fn download_once(
     let mut out = File::create(dest).with_context(|| format!("Failed to create {} file!", dest.display()))?;
     let mut source = resp;
     let mut downloaded_bytes: u64 = 0;
-    let mut buf = [0u8; 64 * 1024];
+    let mut buf = [0u8; 4 * 1024];
     loop {
         let n = match source.read(&mut buf) {
             Ok(0) => break,
