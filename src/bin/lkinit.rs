@@ -33,7 +33,7 @@ fn pack_initramfs_with_progress(temp_ramdisk: &Path, output_img: &Path) -> Resul
             for entry in entries.flatten() {
                 let path = entry.path();
                 if let Ok(rel) = path.strip_prefix(base) {
-                    paths.push(format!("./{}", rel.display()));
+                    paths.push(rel.display().to_string());
                 }
                 if let Ok(meta) = entry.metadata() {
                     if meta.is_file() {
@@ -118,6 +118,7 @@ fn compile_init_template(rootfs: &Path, target_init_bin: &Path) -> Result<(), St
     fs::copy(&cargo_path, build_dir.join("Cargo.toml"))
         .map_err(|e| format!("Failed to copy Cargo.toml template: {}", e))?;
     let cargo_default = Command::new("cargo")
+        .env("RUSTFLAGS", "-C target-feature=+crt-static")
         .args(&["build", "--manifest-path", "/tmp/lkinit/Cargo.toml", "--release"])
         .status()
         .map_err(|e| format!("Cargo compilation error: {}", e))?;
