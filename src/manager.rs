@@ -361,7 +361,7 @@ struct InstallTarget {
     source: String,
     location: repo::PackageLocation,
     metadata: Option<pkg::PackageMetadata>,
-    expected_sha256: Option<String>,
+    expected_sha256: String,
 }
 
 fn build_install_target(cfg: &Config, package: &str) -> Result<InstallTarget, LkpmError> {
@@ -371,6 +371,7 @@ fn build_install_target(cfg: &Config, package: &str) -> Result<InstallTarget, Lk
             source: package.to_string(),
             location: repo::PackageLocation::Remote(package.to_string()),
             metadata: None,
+            expected_sha256: None,
         });
     }
     ensure_package_is_not_blocked(cfg, package)?;
@@ -385,7 +386,7 @@ fn build_install_target(cfg: &Config, package: &str) -> Result<InstallTarget, Lk
         },
         location,
         metadata: None,
-        expected_sha256: repo_info.sha256.clone(),
+        expected_sha256: None,
     })
 }
 
@@ -521,16 +522,17 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
             for (i, target) in plan_targets.into_iter().enumerate() {
                 if let Some(path) = &downloaded_paths[i] {
                     let path = path.clone();
+                    let pkg_name = target.requested_name.as_deref().unwrap_or(&target.source);
                     let checksum = match verify_package_checksum(&path, target.expected_sha256.as_deref()) {
                         Ok(sha) => sha,
                         Err(err) => {
-                            ui::error(&format!("Checksum verification failed for {}: {}", target, err));
+                            ui::error(&format!("Checksum verification failed for {}: {}", pkg_name, err));
                             continue;
                         }
                     };
                     let metadata = pkg::read_package_metadata(&path)?;
                     validate_package_metadata(&cfg, &metadata)?;
-                    prepared.push(PreparedInstall { target, path, metadata, verified_checksum });
+                    prepared.push(PreparedInstall { target, path, metadata, checksum });
                 } else {
                     continue;
                 }
@@ -828,7 +830,7 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
                     let checksum = match verify_package_checksum(&path, target.expected_sha256.as_deref()) {
                         Ok(sha) => sha,
                         Err(err) => {
-                            ui::error(&format!("Checksum verification failed for {}: {}", target, err));
+                            ui::error(&format!("Checksum verification failed for {}: {}", target.record.name, err));
                             continue;
                         }
                     };
