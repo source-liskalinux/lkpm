@@ -1,212 +1,404 @@
-use colored::*;
-use nix::mount::{mount, umount, MsFlags};
+use std::env;
+use std::error::Error;
 use std::ffi::CString;
 use std::fs;
-use std::path::Path;
+use std::io::{self, IsTerminal, Write};
+use std::os::raw::{c_char, c_int, c_ulong, c_void};
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
-type InitResult<T> = Result<T, Box<dyn std::error::Error>>;
+type InitResult<T> = Result<T, Box<dyn Error>>;
 
-fn log( message: &str ) { println!("{} {}", "[ i ]".bright_cyan(), message); }
-fn success( message: &str ) { println!("{} {}", "[ ✓ ]".bright_green(), message.bright_green()); }
-fn warning( message: &str ) { println!("{} {}", "[ ! ]".bright_yellow(), message.bright_yellow()); }
-fn error( message: &str ) { println!("{} {}", "[ ✗ ]".bright_red(), message.bright_red()); }
+const NEW_ROOT: &str = "/new_root";
+const BOOT_MOUNT: &str = "/run/liska/bootmnt";
+const SOURCE_SQUASHFS: &str = "/src_sfs";
+const COW: &str = "/cow";
 
-fn main() -> InitResult<()> {
-    let boot_from_iso = std::env::var("LKSYSTEM_INIT_ISO")
-        .map(|value| matches!(value.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
-        .unwrap_or(false);
-    println!("");
-    println!("{}", "             ::: [ WELCOME TO LISKA LINUX ] :::".bright_cyan().bold());
-    println!("");
+const MS_RDONLY: c_ulong = 1;
+const MS_MOVE: c_ulong = 8192;
+const MS_RELATIME: c_ulong = 1 << 21;
+
+unsafe extern "C" {
+    fn mount(
+        source: *const c_char,
+        target: *const c_char,
+        filesystemtype: *const c_char,
+        mountflags: c_ulong,
+        data: *const c_void,
+    ) -> c_int;
+    fn umount(target: *const c_char) -> c_int;
+    fn chroot(path: *const c_char) -> c_int;
+    fn execv(path: *const c_char, argv: *const *const c_char) -> c_int;
+}
+
+fn main() {
+    if let Err(error) = run() {
+        error(&format!("CRITICAL: {error}"));
+        error("Initializing emergency shell!");
+        emergency_shell();
+    }
+}
+
+fn run() -> InitResult<()> {
+    let boot_from_iso = env_flag("LKSYSTEM_INIT_ISO");
     log("Mounting pseudo filesystems....");
-    mount_pseudo_fs()?;
+    mount_pseudo_filesystems();
     success("Pseudo filesystems mounted successfully!");
     if boot_from_iso {
-        log("Scanning block devices for Liska Linux ISO....");
-        let bootmnt = "/run/liska/bootmnt";
-        fs::create_dir_all(bootmnt).ok();
-        fs::create_dir_all("/src_sfs").ok();
-        fs::create_dir_all("/cow").ok();
-        fs::create_dir_all("/new_root").ok();
-        let mut found = false;
-        for _ in 0..15 {
-            let _ = Command::new("/bin/mdev").arg("-s").status();
-            if let Ok(entries) = fs::read_dir("/dev") {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    let name = path.to_string_lossy();
-                    if name.starts_with("/dev/sd") || name.starts_with("/dev/nvme") || name.starts_with("/dev/vd") || name.starts_with("/dev/sr") {
-                        if mount(Some(path.as_path()), Path::new(bootmnt), None::<&str>, MsFlags::MS_RDONLY, None::<&str>).is_ok() {
-                            if Path::new(&format!("{}/liskafs.sfs", bootmnt)).exists() {
-                                found = true;
-                                success(&format!("Found liskafs.sfs on {}!", name.bright_cyan()));
-                                break;
-                            }
-                            let _ = umount(bootmnt);
-                        }
-                    }
-                }
-            }
-            if found { break; }
-            thread::sleep(Duration::from_millis(300));
-        }
-        if !found {
-            error("CRITICAL: could not find liskafs.sfs!");
-            warning("Initializing bash shell for emergency....");
-            let _ = Command::new("/bin/sh").status();
-            return Ok(());
-        }
-        log("Mounting squashfs and setting up overlayfs....");
-        mount(Some(format!("{}/liskafs.sfs", bootmnt).as_str()), "/src_sfs", Some("squashfs"), MsFlags::MS_RDONLY, None::<&str>)?;
-        mount(Some("tmpfs"), "/cow", Some("tmpfs"), MsFlags::empty(), None::<&str>)?;
-        fs::create_dir_all("/cow/upper").ok();
-        fs::create_dir_all("/cow/work").ok();
-        mount(
-            Some("overlay"),
-            "/new_root",
-            Some("overlay"),
-            MsFlags::empty(),
-            Some("lowerdir=/src_sfs,upperdir=/cow/upper,workdir=/cow/work"),
-        )?;
-        success("Squashfs and overlayfs setup completed successfully!");
+        mount_iso_root()?;
     } else {
-        log("Loading storage and filesystem kernel modules....");
-        load_essential_modules();
-        log("Resolving root partition from cmdline....");
-        let root_param = get_cmdline_param("root=");
-        let real_dev = resolve_device(&root_param);
-        log(&format!("Mounting root filesystem ({} -> {})....", real_dev.cyan(), "/new_root".cyan()));
-        fs::create_dir_all("/new_root").ok();
-        let mut mounted = false;
-        for _ in 0..10 {
-            let _ = Command::new("/bin/mdev").arg("-s").status();
-            if mount(Some(real_dev.as_str()), "/new_root", None::<&str>, MsFlags::MS_RELATIME, None::<&str>).is_ok() 
-               || mount(Some(real_dev.as_str()), "/new_root", None::<&str>, MsFlags::MS_RELATIME, Some("subvol=@")).is_ok() {
-                success(&format!("Mounted root filesystem {} to {}!", real_dev.bright_cyan(), "/new_root".bright_cyan()));
-                mounted = true;
-                break;
-            }
-            thread::sleep(Duration::from_millis(300));
-        }
-        if !mounted {
-            error(&format!("CRITICAL: could not mount root filesystem {}!", real_dev.cyan()));
-            warning("Initializing bash shell for emergency....");
-            let _ = Command::new("/bin/sh").status();
-            return Ok(());
-        }
+        mount_real_root()?;
     }
-    log(&format!("Moving virtual mounts into {}....", "/new_root".cyan()));
-    move_virtual_mounts("/new_root")?;
+    log(&format!("Moving virtual mounts into {NEW_ROOT}...."));
+    move_virtual_mounts(NEW_ROOT)?;
     log("Searching lksystem in new root....");
-    let (init_path, init_args) = find_init_program("/new_root");
-    success(&format!("Found {} in {}! Starting lksystem as PID 1.", init_path.bright_cyan(), "/new_root".bright_cyan()));
-    switch_root("/new_root", &init_path, &init_args)?;
+    let init = find_init_program(NEW_ROOT).ok_or("No lksystem or fallback init found!")?;
+    success(&format!("Starting {init} as PID 1."));
+    switch_root(NEW_ROOT, &init)?;
     Ok(())
 }
 
-fn mount_pseudo_fs() -> InitResult<()> {
-    let _ = fs::create_dir_all("/proc");
-    let _ = fs::create_dir_all("/sys");
-    let _ = fs::create_dir_all("/dev");
-    let _ = fs::create_dir_all("/run");
-    let _ = mount(Some("proc"), "/proc", Some("proc"), MsFlags::empty(), None::<&str>);
-    let _ = mount(Some("sysfs"), "/sys", Some("sysfs"), MsFlags::empty(), None::<&str>);
-    let _ = mount(Some("devtmpfs"), "/dev", Some("devtmpfs"), MsFlags::empty(), None::<&str>);
-    let _ = mount(Some("tmpfs"), "/run", Some("tmpfs"), MsFlags::empty(), None::<&str>);
+fn log(message: &str) {
+    emit("i", "\x1b[1;36m", message, false);
+}
+
+fn success(message: &str) {
+    emit("+", "\x1b[1;32m", message, true);
+}
+
+fn warning(message: &str) {
+    emit("!", "\x1b[1;33m", message, true);
+}
+
+fn error(message: &str) {
+    emit("x", "\x1b[1;31m", message, true);
+}
+
+fn emit(prefix: &str, color: &str, message: &str, color_message: bool) {
+    let mut stderr = io::stderr().lock();
+    if stderr.is_terminal() {
+        if color_message {
+            let _ = writeln!(stderr, "{color}[{prefix}] {message}\x1b[0m");
+        } else {
+            let _ = writeln!(stderr, "{color}[{prefix}]\x1b[0m {message}");
+        }
+    } else {
+        let _ = writeln!(stderr, "[{prefix}] {message}");
+    }
+}
+
+fn env_flag(name: &str) -> bool {
+    env::var(name)
+        .map(|value| matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false)
+}
+
+fn mount_iso_root() -> InitResult<()> {
+    log("Scanning block devices for Liska Linux ISO....");
+    create_dirs([BOOT_MOUNT, SOURCE_SQUASHFS, COW, NEW_ROOT]);
+    let iso_device = find_iso_device()?;
+    success(&format!("Found liskafs.sfs on {iso_device}!"));
+    log("Mounting squashfs and setting up overlayfs....");
+    mount_fs(
+        Some(&format!("{BOOT_MOUNT}/liskafs.sfs")),
+        SOURCE_SQUASHFS,
+        Some("squashfs"),
+        MS_RDONLY,
+        None,
+    )?;
+    mount_fs(Some("tmpfs"), COW, Some("tmpfs"), 0, None)?;
+    create_dirs(["/cow/upper", "/cow/work"]);
+    mount_fs(
+        Some("overlay"),
+        NEW_ROOT,
+        Some("overlay"),
+        0,
+        Some("lowerdir=/src_sfs,upperdir=/cow/upper,workdir=/cow/work"),
+    )?;
+    success("Squashfs and overlayfs are ready!");
     Ok(())
+}
+
+fn find_iso_device() -> InitResult<String> {
+    for _ in 0..15 {
+        run_optional("/bin/mdev", &["-s"]);
+        for device in candidate_block_devices()? {
+            let device_name = device.display().to_string();
+            if mount_fs(
+                Some(&device_name),
+                BOOT_MOUNT,
+                None,
+                MS_RDONLY | MS_RELATIME,
+                None,
+            )
+            .is_ok()
+            {
+                if Path::new(&format!("{BOOT_MOUNT}/liskafs.sfs")).exists() {
+                    return Ok(device_name);
+                }
+                let _ = umount_target(BOOT_MOUNT);
+            }
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    Err("could not find liskafs.sfs!".into())
+}
+
+fn candidate_block_devices() -> io::Result<Vec<PathBuf>> {
+    let mut devices = Vec::new();
+    for entry in fs::read_dir("/dev")? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with("sd")
+            || name.starts_with("vd")
+            || name.starts_with("nvme")
+            || name.starts_with("sr")
+        {
+            devices.push(entry.path());
+        }
+    }
+    devices.sort();
+    Ok(devices)
+}
+
+fn mount_real_root() -> InitResult<()> {
+    log("Loading storage and filesystem kernel modules....");
+    load_essential_modules();
+    let cmdline = fs::read_to_string("/proc/cmdline").unwrap_or_default();
+    let root = cmdline_value(&cmdline, "root=").ok_or("missing root= kernel parameter")?;
+    let root_device = resolve_device(&root);
+    let root_filesystem = cmdline_value(&cmdline, "rootfstype=");
+    let root_flags = cmdline_value(&cmdline, "rootflags=");
+    log(&format!("Mounting root filesystem {root_device} to {NEW_ROOT}...."));
+    fs::create_dir_all(NEW_ROOT)?;
+    for _ in 0..10 {
+        run_optional("/bin/mdev", &["-s"]);
+        if mount_root_once(
+            &root_device,
+            root_filesystem.as_deref(),
+            root_flags.as_deref(),
+        ) {
+            success(&format!("Mounted root filesystem {root_device} to {NEW_ROOT}!"));
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(300));
+    }
+    Err(format!("Could not mount root filesystem {root_device}!").into())
+}
+
+fn mount_root_once(device: &str, filesystem: Option<&str>, flags: Option<&str>) -> bool {
+    if mount_fs(Some(device), NEW_ROOT, filesystem, MS_RELATIME, flags).is_ok() {
+        return true;
+    }
+    flags.is_none()
+        && mount_fs(
+            Some(device),
+            NEW_ROOT,
+            filesystem,
+            MS_RELATIME,
+            Some("subvol=@"),
+        )
+        .is_ok()
 }
 
 fn load_essential_modules() {
-    let modules = [
-        "ahci", "ata_piix", "libata", "sd_mod", "scsi_mod", 
-        "virtio_blk", "virtio_pci", "nvme", "ext4", "btrfs", "xfs", "f2fs", "vfat", "overlay"
-    ];
-    for mod_name in modules {
-        let _ = Command::new("/bin/modprobe").arg(mod_name).status();
+    for module in [
+        "ahci",
+        "ata_piix",
+        "libata",
+        "sd_mod",
+        "scsi_mod",
+        "virtio_blk",
+        "virtio_pci",
+        "nvme",
+        "ext4",
+        "btrfs",
+        "xfs",
+        "f2fs",
+        "vfat",
+        "overlay",
+    ] {
+        run_optional("/bin/modprobe", &[module]);
     }
 }
 
-fn get_cmdline_param(param: &str) -> String {
-    if let Ok(cmdline) = fs::read_to_string("/proc/cmdline") {
-        for arg in cmdline.split_whitespace() {
-            if arg.starts_with(param) {
-                return arg.trim_start_matches(param).to_string();
-            }
-        }
-    }
-    String::new()
+fn cmdline_value(cmdline: &str, key: &str) -> Option<String> {
+    cmdline
+        .split_whitespace()
+        .find_map(|arg| arg.strip_prefix(key).map(ToOwned::to_owned))
+        .filter(|value| !value.is_empty())
 }
 
 fn resolve_device(target: &str) -> String {
-    if target.is_empty() { return String::new(); }
-    if target.starts_with("UUID=") || target.starts_with("LABEL=") || target.starts_with("PARTUUID=") {
-        if let Ok(output) = Command::new("blkid").output() {
-            let out_str = String::from_utf8_lossy(&output.stdout);
-            for line in out_str.lines() {
-                if line.contains(target) {
-                    if let Some(dev) = line.split(':').next() {
-                        return dev.trim().to_string();
-                    }
-                }
-            }
+    let alias = if let Some(value) = target.strip_prefix("UUID=") {
+        Some(format!("/dev/disk/by-uuid/{value}"))
+    } else if let Some(value) = target.strip_prefix("PARTUUID=") {
+        Some(format!("/dev/disk/by-partuuid/{value}"))
+    } else {
+        target
+            .strip_prefix("LABEL=")
+            .map(|value| format!("/dev/disk/by-label/{value}"))
+    };
+    if let Some(alias) = alias {
+        if Path::new(&alias).exists() {
+            return alias;
         }
     }
-    target.to_string()
+    target.to_owned()
 }
 
 fn move_virtual_mounts(sysroot: &str) -> InitResult<()> {
-    for dir in &["dev", "proc", "sys", "run"] {
-        let old_path = format!("/{}", dir);
-        let new_path = format!("{}/{}", sysroot, dir);
-        let _ = fs::create_dir_all(&new_path);
-        let _ = mount(Some(old_path.as_str()), new_path.as_str(), None::<&str>, MsFlags::MS_MOVE, None::<&str>);
+    for dir in ["dev", "proc", "sys", "run"] {
+        let old_path = format!("/{dir}");
+        let new_path = format!("{sysroot}/{dir}");
+        fs::create_dir_all(&new_path)?;
+        mount_fs(Some(&old_path), &new_path, None, MS_MOVE, None)?;
     }
     Ok(())
 }
 
-fn find_init_program(sysroot: &str) -> (String, Vec<String>) {
-    let candidates = ["/bin/lksystem", "/usr/bin/lksystem"];
-    for cand in candidates {
-        let candidate_path = format!("{}{}", sysroot, cand);
-        if Path::new(&candidate_path).exists() {
-            let config_dir_path = format!("{}{}", sysroot, "/etc/lksystem");
-            let config_dir = Path::new(&config_dir_path);
-            let args = if config_dir.exists() {
-                vec![cand.to_string(), "--conf".to_string(), "/etc/lksystem".to_string()]
-            } else {
-                vec![cand.to_string()]
-            };
-            return (cand.to_string(), args);
-        }
-    }
-    let fallback = "/sbin/init";
-    if Path::new(&format!("{}{}", sysroot, fallback)).exists() {
-        return (fallback.to_string(), vec![fallback.to_string()]);
-    }
-    let fallback2 = "/usr/lib/systemd/systemd";
-    if Path::new(&format!("{}{}", sysroot, fallback2)).exists() {
-        return (fallback2.to_string(), vec![fallback2.to_string()]);
-    }
-    ("/sbin/init".to_string(), vec!["/sbin/init".to_string()])
+fn find_init_program(sysroot: &str) -> Option<String> {
+    [
+        "/usr/sbin/lksystem",
+        "/sbin/lksystem",
+        "/usr/bin/lksystem",
+        "/bin/lksystem",
+        "/sbin/init",
+        "/usr/sbin/init",
+    ]
+    .into_iter()
+    .find(|candidate| Path::new(&format!("{sysroot}{candidate}")).exists())
+    .map(ToOwned::to_owned)
 }
 
-fn switch_root(sysroot: &str, init_path: &str, init_args: &[String]) -> InitResult<()> {
-    std::env::set_current_dir(sysroot)?;
-    nix::unistd::chroot(".")?;
-    std::env::set_current_dir("/")?;
-    let mut exec_args = vec![CString::new(init_path)?];
-    for arg in init_args {
-        exec_args.push(CString::new(arg.as_str())?);
+fn switch_root(sysroot: &str, init_path: &str) -> InitResult<()> {
+    let sysroot_path = CString::new(sysroot)?;
+    let root_path = CString::new("/")?;
+    env::set_current_dir(sysroot)?;
+    unsafe {
+        if mount(sysroot_path.as_ptr(), root_path.as_ptr(), std::ptr::null(), MS_MOVE, std::ptr::null()) != 0 {
+            warning("Failed to move mounted root! Initializing fallback chroot...");
+        }
     }
-    match nix::unistd::execv(&exec_args[0], &exec_args) {
-        Ok(_) => unreachable!("Execv should not return"),
-        Err(err) => Err(format!(
-            "CRITICAL: could not switch root to lksystem at {}: {}",
-            sysroot, err
+    chroot_to(".")?;
+    env::set_current_dir("/")?;
+    exec_program(init_path)?;
+    unreachable!("Execv returned success");
+}
+
+fn mount_pseudo_filesystems() {
+    create_dirs(["/proc", "/sys", "/dev", "/dev/pts", "/run"]);
+    mount_if_needed("proc", "/proc", "proc");
+    mount_if_needed("sysfs", "/sys", "sysfs");
+    mount_if_needed("devtmpfs", "/dev", "devtmpfs");
+    mount_if_needed("devpts", "/dev/pts", "devpts");
+    mount_if_needed("tmpfs", "/run", "tmpfs");
+}
+
+fn mount_if_needed(source: &str, target: &str, filesystem: &str) {
+    if is_mount_point(target) {
+        return;
+    }
+    if let Err(error) = mount_fs(Some(source), target, Some(filesystem), 0, None) {
+        warning(&format!("Could not mount {target}! {error}"));
+    }
+}
+
+fn is_mount_point(target: &str) -> bool {
+    let path = Path::new(target);
+    if !path.exists() {
+        return false;
+    }
+    if let Ok(mountinfo) = fs::read_to_string("/proc/self/mountinfo") {
+        mountinfo
+            .lines()
+            .any(|line| line.split(' ').nth(4) == Some(target))
+    } else {
+        false
+    }
+}
+
+fn create_dirs<const N: usize>(paths: [&str; N]) {
+    for path in paths {
+        let _ = fs::create_dir_all(path);
+    }
+}
+
+fn run_optional(program: &str, args: &[&str]) {
+    let _ = Command::new(program).args(args).status();
+}
+
+fn emergency_shell() -> ! {
+    warning("Starting emergency shell....");
+    log("Type 'exit' and press Ctrl+D after fixing the issue!");
+    log("Press Ctrl+D to exit the shell and reboot the system.");
+    loop {
+        let _ = Command::new("/bin/sh").status();
+        thread::sleep(Duration::from_secs(1));
+    }
+}
+
+fn mount_fs(
+    source: Option<&str>,
+    target: &str,
+    filesystem: Option<&str>,
+    flags: c_ulong,
+    data: Option<&str>,
+) -> io::Result<()> {
+    let source = optional_cstring(source)?;
+    let target = CString::new(target)?;
+    let filesystem = optional_cstring(filesystem)?;
+    let data = optional_cstring(data)?;
+    let source_ptr = source.as_ref().map_or(std::ptr::null(), |value| value.as_ptr());
+    let filesystem_ptr = filesystem
+        .as_ref()
+        .map_or(std::ptr::null(), |value| value.as_ptr());
+    let data_ptr = data
+        .as_ref()
+        .map_or(std::ptr::null(), |value| value.as_ptr() as *const c_void);
+
+    let result = unsafe {
+        mount(
+            source_ptr,
+            target.as_ptr(),
+            filesystem_ptr,
+            flags,
+            data_ptr,
         )
-        .into()),
+    };
+    syscall_result(result)
+}
+
+fn umount_target(target: &str) -> io::Result<()> {
+    let target = CString::new(target)?;
+    syscall_result(unsafe { umount(target.as_ptr()) })
+}
+
+fn chroot_to(path: &str) -> io::Result<()> {
+    let path = CString::new(path)?;
+    syscall_result(unsafe { chroot(path.as_ptr()) })
+}
+
+fn exec_program(program: &str) -> io::Result<()> {
+    let program = CString::new(program)?;
+    let argv = [program.as_ptr(), std::ptr::null()];
+    syscall_result(unsafe { execv(program.as_ptr(), argv.as_ptr()) })
+}
+
+fn syscall_result(result: c_int) -> io::Result<()> {
+    if result == -1 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(())
     }
+}
+
+fn optional_cstring(value: Option<&str>) -> io::Result<Option<CString>> {
+    value
+        .map(CString::new)
+        .transpose()
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))
 }
