@@ -290,12 +290,13 @@ fn switch_root(sysroot: &str, init_path: &str) -> InitResult<()> {
 }
 
 fn mount_pseudo_filesystems() {
-    create_dirs(["/proc", "/sys", "/dev", "/dev/pts", "/run"]);
+    create_dirs(["/proc", "/sys", "/dev", "/run"]);
     mount_if_needed("proc", "/proc", "proc");
     mount_if_needed("sysfs", "/sys", "sysfs");
     mount_if_needed("devtmpfs", "/dev", "devtmpfs");
-    mount_if_needed("devpts", "/dev/pts", "devpts");
     mount_if_needed("tmpfs", "/run", "tmpfs");
+    create_dirs(["/dev/pts"]);
+    mount_if_needed("devpts", "/dev/pts", "devpts");
 }
 
 fn mount_if_needed(source: &str, target: &str, filesystem: &str) {
