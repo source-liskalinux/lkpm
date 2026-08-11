@@ -34,8 +34,8 @@ unsafe extern "C" {
 }
 
 fn main() {
-    if let Err(error) = run() {
-        error(&format!("CRITICAL: {error}"));
+    if let Err(err) = run() {
+        error(&format!("CRITICAL: {err}"));
         error("Initializing emergency shell!");
         emergency_shell();
     }
