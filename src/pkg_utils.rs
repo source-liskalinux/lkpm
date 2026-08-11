@@ -211,10 +211,7 @@ fn parse_pkginfo(text: &str) -> Result<PackageMetadata> {
             .strip_prefix("conflict =")
             .or_else(|| line.strip_prefix("conflicts ="))
         {
-            let dep = normalize_dependency_name(value);
-            if !dep.is_empty() {
-                conflicts.push(repo::canonical_package_name(&dep).to_string());
-            }
+            conflicts.push(value).to_string();
         }
     }
     if name.is_empty() {
