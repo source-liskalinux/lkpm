@@ -88,7 +88,7 @@ pub fn canonical_package_name(package: &str) -> &str {
         "sh" => "bash",
         "systemd" => "lksystem",
         "systemd-libs" => "elogind",
-        "systemd-resolvconf" => "openresolv",
+        "systemd-resolvconf" => "networkmanager",
         "systemd-sysvcompat" => "lksystem",
         "systemd-tests" => "lksystem-tests",
         "systemd-ukify" => "lksystem",
