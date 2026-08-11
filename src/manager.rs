@@ -772,7 +772,6 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
                                 record,
                                 location,
                                 remote_version: repo_pkg.version,
-                                expected_sha256: repo_pkg.sha256.clone(),
                             });
                         }
                     }
