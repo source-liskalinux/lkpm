@@ -61,19 +61,19 @@ fn run() -> InitResult<()> {
 }
 
 fn log(message: &str) {
-    emit("INFO", "\x1b[1;36m", message, false);
+    emit("i", "\x1b[1;36m", message, false);
 }
 
 fn success(message: &str) {
-    emit("OK", "\x1b[1;32m", message, true);
+    emit("✓", "\x1b[1;32m", message, true);
 }
 
 fn warning(message: &str) {
-    emit("WARN", "\x1b[1;33m", message, true);
+    emit("!", "\x1b[1;33m", message, true);
 }
 
 fn error(message: &str) {
-    emit("ERR", "\x1b[1;31m", message, true);
+    emit("✗", "\x1b[1;31m", message, true);
 }
 
 fn emit(prefix: &str, color: &str, message: &str, color_message: bool) {
