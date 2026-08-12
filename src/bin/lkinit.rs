@@ -152,12 +152,16 @@ pub fn generate_liska_initramfs(rootfs: &Path, output_img: &Path) -> Result<(), 
     let temp_ramdisk = PathBuf::from("/tmp/lkinit-ramdisk");
     fs::remove_dir_all(&temp_ramdisk).ok();
     let dirs = &[
-        "bin", "sbin", "dev", "proc", "sys", "root", "run",
-        "usr/bin", "usr/sbin", "lib", "lib64", "usr/lib/modules"
+        "dev", "proc", "sys", "root", "run", "etc",
+        "usr/bin", "usr/sbin", "usr/lib", "usr/lib/modules"
     ];
     for dir in dirs {
         fs::create_dir_all(temp_ramdisk.join(dir)).ok();
     }
+    let _ = run_command("ln", &["-sf", "usr/bin", temp_ramdisk.join("bin").to_str().unwrap()]);
+    let _ = run_command("ln", &["-sf", "usr/bin", temp_ramdisk.join("sbin").to_str().unwrap()]);
+    let _ = run_command("ln", &["-sf", "usr/lib", temp_ramdisk.join("lib").to_str().unwrap()]);
+    let _ = run_command("ln", &["-sf", "usr/lib", temp_ramdisk.join("lib64").to_str().unwrap()]);
     let dst_mod_dir = temp_ramdisk.join("usr/lib/modules");
     let _ = run_command("cp", &["-ax", rootfs_mod_dir.to_str().unwrap(), temp_ramdisk.join("usr/lib/").to_str().unwrap()]);
     info("Uncompressing kernel modules....");
@@ -179,15 +183,17 @@ pub fn generate_liska_initramfs(rootfs: &Path, output_img: &Path) -> Result<(), 
         }
     }
     let liska_libs = &[
-        ("usr/lib/ld-linux-x86-64.so.2", "lib64/ld-linux-x86-64.so.2"),
-        ("usr/lib/libc.so.6", "lib/libc.so.6"),
-        ("usr/lib/libm.so.6", "lib/libm.so.6"),
-        ("usr/lib/libresolv.so.2", "lib/libresolv.so.2"),
+        "ld-linux-x86-64.so.2",
+        "libc.so.6",
+        "libm.so.6",
+        "libresolv.so.2",
     ];
-    for (src_lib, dst_lib) in liska_libs {
-        let rootfs_lib_path = rootfs.join(src_lib);
-        if rootfs_lib_path.exists() {
-            fs::copy(&rootfs_lib_path, temp_ramdisk.join(dst_lib)).ok();
+    info("Copying essential shared libraries to initramfs....");
+    for lib in liska_libs {
+        let src_lib_path = rootfs.join("usr/lib").join(lib);
+        if src_lib_path.exists() {
+            let target_dest = temp_ramdisk.join("usr/lib/");
+            let _ = run_command("cp", &["-L", src_lib_path.to_str().unwrap(), target_dest.to_str().unwrap()]);
         }
     }
     let init_path = temp_ramdisk.join("init");
