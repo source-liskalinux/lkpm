@@ -176,7 +176,7 @@ pub fn generate_liska_initramfs(rootfs: &Path, output_img: &Path) -> Result<(), 
     if busybox_src.exists() {
         info("Copying busybox to initramfs....");
         fs::copy(busybox_src, temp_ramdisk.join("bin/busybox")).ok();
-        for link in &["sh", "mount", "umount", "mdev", "insmod", "modprobe", "blkid", "losetup"] {
+        for link in &["sh", "mount", "umount", "mdev", "insmod", "modprobe", "blkid", "losetup", "mknod"] {
             let link_path = temp_ramdisk.join("bin").join(link);
             let _ = fs::remove_file(&link_path);
             let _ = run_command("ln", &["-sf", "busybox", link_path.to_str().unwrap()]);
