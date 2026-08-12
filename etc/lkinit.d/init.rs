@@ -373,7 +373,7 @@ fn run_optional(program: &str, args: &[&str]) {
 }
 
 fn emergency_shell() -> ! {
-    let _ = writeln!("");
+    println!("");
     warning("TIPS:");
     warning("Type 'exit' on the shell and press Ctrl+D after fixing the issue!");
     warning("Press Ctrl+D to exit the shell and reboot the system.");
