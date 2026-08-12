@@ -61,19 +61,19 @@ fn run() -> InitResult<()> {
 }
 
 fn log(message: &str) {
-    emit("i", "\x1b[1;36m", message, false);
+    emit("INFO", "\x1b[1;36m", message, false);
 }
 
 fn success(message: &str) {
-    emit("+", "\x1b[1;32m", message, true);
+    emit("OK", "\x1b[1;32m", message, true);
 }
 
 fn warning(message: &str) {
-    emit("!", "\x1b[1;33m", message, true);
+    emit("WARN", "\x1b[1;33m", message, true);
 }
 
 fn error(message: &str) {
-    emit("x", "\x1b[1;31m", message, true);
+    emit("ERR", "\x1b[1;31m", message, true);
 }
 
 fn emit(prefix: &str, color: &str, message: &str, color_message: bool) {
@@ -96,6 +96,8 @@ fn env_flag(name: &str) -> bool {
 }
 
 fn mount_iso_root() -> InitResult<()> {
+    log("Loading storage and ISO kernel modules....");
+    load_essential_modules();
     log("Scanning block devices for Liska Linux ISO....");
     create_dirs([BOOT_MOUNT, SOURCE_SQUASHFS, COW, NEW_ROOT]);
     let iso_device = find_iso_device()?;
@@ -122,23 +124,28 @@ fn mount_iso_root() -> InitResult<()> {
 }
 
 fn find_iso_device() -> InitResult<String> {
-    for _ in 0..15 {
+    let fs_types = [Some("iso9660"), Some("vfat"), Some("ext4"), Some("udf"), None];
+    for _ in 0..20 {
         run_optional("/bin/mdev", &["-s"]);
-        for device in candidate_block_devices()? {
-            let device_name = device.display().to_string();
-            if mount_fs(
-                Some(&device_name),
-                BOOT_MOUNT,
-                None,
-                MS_RDONLY | MS_RELATIME,
-                None,
-            )
-            .is_ok()
-            {
-                if Path::new(&format!("{BOOT_MOUNT}/liskafs.sfs")).exists() {
-                    return Ok(device_name);
+        if let Ok(devices) = candidate_block_devices() {
+            for device in devices {
+                let device_name = device.display().to_string();
+                for fs_type in &fs_types {
+                    if mount_fs(
+                        Some(&device_name),
+                        BOOT_MOUNT,
+                        *fs_type,
+                        MS_RDONLY | MS_RELATIME,
+                        None,
+                    )
+                    .is_ok()
+                    {
+                        if Path::new(&format!("{BOOT_MOUNT}/liskafs.sfs")).exists() {
+                            return Ok(device_name);
+                        }
+                        let _ = umount_target(BOOT_MOUNT);
+                    }
                 }
-                let _ = umount_target(BOOT_MOUNT);
             }
         }
         thread::sleep(Duration::from_millis(300));
@@ -148,16 +155,20 @@ fn find_iso_device() -> InitResult<String> {
 
 fn candidate_block_devices() -> io::Result<Vec<PathBuf>> {
     let mut devices = Vec::new();
-    for entry in fs::read_dir("/dev")? {
-        let entry = entry?;
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if name.starts_with("sd")
-            || name.starts_with("vd")
-            || name.starts_with("nvme")
-            || name.starts_with("sr")
-        {
-            devices.push(entry.path());
+    if let Ok(entries) = fs::read_dir("/dev") {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.starts_with("sd")
+                || name_str.starts_with("vd")
+                || name_str.starts_with("nvme")
+                || name_str.starts_with("sr")
+                || name_str.starts_with("hd")
+                || name_str.starts_with("mmcblk")
+                || name_str.starts_with("loop")
+            {
+                devices.push(entry.path());
+            }
         }
     }
     devices.sort();
@@ -169,58 +180,86 @@ fn mount_real_root() -> InitResult<()> {
     load_essential_modules();
     let cmdline = fs::read_to_string("/proc/cmdline").unwrap_or_default();
     let root = cmdline_value(&cmdline, "root=").ok_or("missing root= kernel parameter")?;
-    let root_device = resolve_device(&root);
     let root_filesystem = cmdline_value(&cmdline, "rootfstype=");
     let root_flags = cmdline_value(&cmdline, "rootflags=");
-    log(&format!("Mounting root filesystem {root_device} to {NEW_ROOT}...."));
+    log(&format!("Resolving target root device: {root}...."));
     fs::create_dir_all(NEW_ROOT)?;
-    for _ in 0..10 {
+    for attempt in 1..=15 {
         run_optional("/bin/mdev", &["-s"]);
-        if mount_root_once(
-            &root_device,
-            root_filesystem.as_deref(),
-            root_flags.as_deref(),
-        ) {
-            success(&format!("Mounted root filesystem {root_device} to {NEW_ROOT}!"));
-            return Ok(());
+        let root_device = resolve_device(&root);
+        if Path::new(&root_device).exists() {
+            log(&format!("Attempting to mount {root_device} on {NEW_ROOT} (Attempt {attempt})...."));
+            if mount_root_robust(
+                &root_device,
+                root_filesystem.as_deref(),
+                root_flags.as_deref(),
+            ) {
+                success(&format!("Mounted root filesystem {root_device} to {NEW_ROOT}!"));
+                return Ok(());
+            }
         }
         thread::sleep(Duration::from_millis(300));
     }
-    Err(format!("Could not mount root filesystem {root_device}!").into())
+    Err(format!("Could not mount root filesystem target '{root}'!").into())
 }
 
-fn mount_root_once(device: &str, filesystem: Option<&str>, flags: Option<&str>) -> bool {
-    if mount_fs(Some(device), NEW_ROOT, filesystem, MS_RELATIME, flags).is_ok() {
-        return true;
+fn mount_root_robust(device: &str, filesystem: Option<&str>, flags: Option<&str>) -> bool {
+    if let Some(fs) = filesystem {
+        if mount_fs(Some(device), NEW_ROOT, Some(fs), MS_RELATIME, flags).is_ok() {
+            return true;
+        }
     }
-    flags.is_none()
-        && mount_fs(
-            Some(device),
-            NEW_ROOT,
-            filesystem,
-            MS_RELATIME,
-            Some("subvol=@"),
-        )
-        .is_ok()
+    let supported_fs = ["btrfs", "ext4", "xfs", "f2fs", "vfat", "ntfs3", "ext3", "ext2"];
+    for fs in supported_fs {
+        if mount_fs(Some(device), NEW_ROOT, Some(fs), MS_RELATIME, flags).is_ok() {
+            return true;
+        }
+        if fs == "btrfs" && flags.is_none() {
+            if mount_fs(
+                Some(device),
+                NEW_ROOT,
+                Some("btrfs"),
+                MS_RELATIME,
+                Some("subvol=@"),
+            )
+            .is_ok() {
+                return true;
+            }
+        }
+    }
+    mount_fs(Some(device), NEW_ROOT, None, MS_RELATIME, flags).is_ok()
 }
 
 fn load_essential_modules() {
-    for module in [
+    let modules = [
+        // Controller and Storage Drivers
         "ahci",
         "ata_piix",
         "libata",
         "sd_mod",
+        "sr_mod",
+        "cdrom",
         "scsi_mod",
         "virtio_blk",
         "virtio_pci",
         "nvme",
+        "mmc_block",
+        "sdhci",
+        // Filesystem Drivers
         "ext4",
         "btrfs",
         "xfs",
         "f2fs",
         "vfat",
+        "fat",
+        "iso9660",
+        "isofs",
+        "udf",
+        "ntfs3",
+        "squashfs",
         "overlay",
-    ] {
+    ];
+    for module in modules {
         run_optional("/bin/modprobe", &[module]);
     }
 }
@@ -268,6 +307,7 @@ fn find_init_program(sysroot: &str) -> Option<String> {
         "/bin/lksystem",
         "/sbin/init",
         "/usr/sbin/init",
+        "/bin/sh",
     ]
     .into_iter()
     .find(|candidate| Path::new(&format!("{sysroot}{candidate}")).exists())
@@ -333,9 +373,10 @@ fn run_optional(program: &str, args: &[&str]) {
 }
 
 fn emergency_shell() -> ! {
-    warning("Starting emergency shell....");
-    log("Type 'exit' and press Ctrl+D after fixing the issue!");
-    log("Press Ctrl+D to exit the shell and reboot the system.");
+    let _ = writeln!("");
+    warning("TIPS:");
+    warning("Type 'exit' on the shell and press Ctrl+D after fixing the issue!");
+    warning("Press Ctrl+D to exit the shell and reboot the system.");
     loop {
         let _ = Command::new("/bin/sh").status();
         thread::sleep(Duration::from_secs(1));
@@ -360,7 +401,6 @@ fn mount_fs(
     let data_ptr = data
         .as_ref()
         .map_or(std::ptr::null(), |value| value.as_ptr() as *const c_void);
-
     let result = unsafe {
         mount(
             source_ptr,
