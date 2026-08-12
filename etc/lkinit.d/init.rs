@@ -126,6 +126,8 @@ fn mount_iso_root() -> InitResult<()> {
 }
 
 fn setup_loop_device(file_path: &str) -> InitResult<String> {
+    run_optional("/bin/modprobe", &["loop"]);
+    run_optional("/bin/mdev", &["-s"]);
     if !Path::new("/dev/loop0").exists() {
         let _ = Command::new("mknod")
             .args(["/dev/loop0", "b", "7", "0"])
@@ -139,17 +141,16 @@ fn setup_loop_device(file_path: &str) -> InitResult<String> {
             return Ok("/dev/loop0".to_string());
         }
     }
-    let output = Command::new("losetup")
+    let status_auto = Command::new("losetup")
         .args(["-f", file_path])
         .status();
-    if output.is_ok() && output.unwrap().success() {
-        let output = Command::new("losetup")
-            .args(["-j", file_path])
-            .output()?;
-        let out_str = String::from_utf8_lossy(&output.stdout);
-        if let Some(dev) = out_str.split(':').next() {
-            if !dev.trim().is_empty() {
-                return Ok(dev.trim().to_string());
+    if status_auto.is_ok() && status_auto.unwrap().success() {
+        if let Ok(output) = Command::new("losetup").args(["-j", file_path]).output() {
+            let out_str = String::from_utf8_lossy(&output.stdout);
+            if let Some(dev) = out_str.split(':').next() {
+                if !dev.trim().is_empty() {
+                    return Ok(dev.trim().to_string());
+                }
             }
         }
     }
@@ -266,6 +267,7 @@ fn mount_root_robust(device: &str, filesystem: Option<&str>, flags: Option<&str>
 fn load_essential_modules() {
     let modules = [
         // Controller and Storage Drivers
+        "loop",
         "ahci",
         "ata_piix",
         "libata",
@@ -410,10 +412,9 @@ fn run_optional(program: &str, args: &[&str]) {
 }
 
 fn emergency_shell() -> ! {
-    println!("");
-    warning("TIPS:");
-    warning("Type 'exit' on the shell and press Ctrl+D after fixing the issue!");
-    warning("Press Ctrl+D to exit the shell and reboot the system.");
+    warning("> TIPS for debugging:");
+    warning("  - Type 'exit' on the shell and press Ctrl+D after fixing the issue!");
+    warning("  - Press Ctrl+D to exit the shell and reboot the system.");
     loop {
         let _ = Command::new("/bin/sh").status();
         thread::sleep(Duration::from_secs(1));
