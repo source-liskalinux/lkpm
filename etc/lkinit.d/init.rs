@@ -126,19 +126,31 @@ fn mount_iso_root() -> InitResult<()> {
 }
 
 fn setup_loop_device(file_path: &str) -> InitResult<String> {
-    let output = Command::new("/bin/losetup")
-        .args(["-f", "-r", file_path])
-        .status();
-    if output.is_err() || !output.unwrap().success() {
-        let _ = Command::new("/bin/losetup").args(["-f", file_path]).status();
+    if !Path::new("/dev/loop0").exists() {
+        let _ = Command::new("mknod")
+            .args(["/dev/loop0", "b", "7", "0"])
+            .status();
     }
-    let output = Command::new("/bin/losetup")
-        .args(["-j", file_path])
-        .output()?;
-    let out_str = String::from_utf8_lossy(&output.stdout);
-    if let Some(dev) = out_str.split(':').next() {
-        if !dev.trim().is_empty() {
-            return Ok(dev.trim().to_string());
+    let status = Command::new("losetup")
+        .args(["/dev/loop0", file_path])
+        .status();
+    if let Ok(st) = status {
+        if st.success() {
+            return Ok("/dev/loop0".to_string());
+        }
+    }
+    let output = Command::new("losetup")
+        .args(["-f", file_path])
+        .status();
+    if output.is_ok() && output.unwrap().success() {
+        let output = Command::new("losetup")
+            .args(["-j", file_path])
+            .output()?;
+        let out_str = String::from_utf8_lossy(&output.stdout);
+        if let Some(dev) = out_str.split(':').next() {
+            if !dev.trim().is_empty() {
+                return Ok(dev.trim().to_string());
+            }
         }
     }
     Ok("/dev/loop0".to_string())
