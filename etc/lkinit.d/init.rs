@@ -103,8 +103,10 @@ fn mount_iso_root() -> InitResult<()> {
     let iso_device = find_iso_device()?;
     success(&format!("Found liskafs.sfs on {iso_device}!"));
     log("Mounting squashfs and setting up overlayfs....");
+    let sfs_path = format!("{BOOT_MOUNT}/liskafs.sfs");
+    let loop_dev = setup_loop_device(&sfs_path)?;
     mount_fs(
-        Some(&format!("{BOOT_MOUNT}/liskafs.sfs")),
+        Some(&loop_dev),
         SOURCE_SQUASHFS,
         Some("squashfs"),
         MS_RDONLY,
@@ -121,6 +123,25 @@ fn mount_iso_root() -> InitResult<()> {
     )?;
     success("Squashfs and overlayfs are ready!");
     Ok(())
+}
+
+fn setup_loop_device(file_path: &str) -> InitResult<String> {
+    let output = Command::new("/bin/losetup")
+        .args(["-f", "-r", file_path])
+        .status();
+    if output.is_err() || !output.unwrap().success() {
+        let _ = Command::new("/bin/losetup").args(["-f", file_path]).status();
+    }
+    let output = Command::new("/bin/losetup")
+        .args(["-j", file_path])
+        .output()?;
+    let out_str = String::from_utf8_lossy(&output.stdout);
+    if let Some(dev) = out_str.split(':').next() {
+        if !dev.trim().is_empty() {
+            return Ok(dev.trim().to_string());
+        }
+    }
+    Ok("/dev/loop0".to_string())
 }
 
 fn find_iso_device() -> InitResult<String> {
@@ -369,7 +390,11 @@ fn create_dirs<const N: usize>(paths: [&str; N]) {
 }
 
 fn run_optional(program: &str, args: &[&str]) {
-    let _ = Command::new(program).args(args).status();
+    let _ = Command::new(program)
+        .args(args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
 }
 
 fn emergency_shell() -> ! {
