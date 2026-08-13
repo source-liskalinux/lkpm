@@ -113,13 +113,16 @@ fn mount_iso_root() -> InitResult<()> {
         None,
     )?;
     mount_fs(Some("tmpfs"), COW, Some("tmpfs"), 0, None)?;
-    create_dirs(["/cow/upper", "/cow/work"]);
+    let upper_dir = format!("{COW}/upper");
+    let work_dir = format!("{COW}/work");
+    create_dirs([&upper_dir, &work_dir]);
+    let overlay_opts = format!("lowerdir={SOURCE_SQUASHFS},upperdir={upper_dir},workdir={work_dir}");
     mount_fs(
         Some("overlay"),
         NEW_ROOT,
         Some("overlay"),
         0,
-        Some("lowerdir=/src_sfs,upperdir=/cow/upper,workdir=/cow/work"),
+        Some(&overlay_opts),
     )?;
     success("Squashfs and overlayfs are ready!");
     Ok(())
@@ -128,8 +131,9 @@ fn mount_iso_root() -> InitResult<()> {
 fn setup_loop_device(file_path: &str) -> InitResult<String> {
     run_optional("/bin/modprobe", &["loop"]);
     run_optional("/bin/mdev", &["-s"]);
+    create_dirs(["/dev"]);
     if !Path::new("/dev/loop0").exists() {
-        let _ = Command::new("mknod")
+        let _ = Command::new("/bin/mknod")
             .args(["/dev/loop0", "b", "7", "0"])
             .status();
     }
