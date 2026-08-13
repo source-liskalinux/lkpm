@@ -417,10 +417,18 @@ fn run_optional(program: &str, args: &[&str]) {
 
 fn emergency_shell() -> ! {
     warning("> TIPS for debugging:");
-    warning("  - Type 'exit' on the shell and press Ctrl+D after fixing the issue!");
-    warning("  - Press Ctrl+D to exit the shell and reboot the system.");
+    warning("  - Type 'exit' or Ctrl + D after fixing the issue to retry or reboot.");
+    env::set_var("PATH", "/usr/sbin:/usr/bin:/sbin:/bin");
     loop {
-        let _ = Command::new("/bin/sh").status();
+        let mut child = Command::new("/bin/sh")
+            .arg("-i")
+            .env("TERM", "linux")
+            .status();
+        if child.is_err() {
+            let _ = Command::new("/bin/cttyhack")
+                .arg("/bin/sh")
+                .status();
+        }
         thread::sleep(Duration::from_secs(1));
     }
 }
