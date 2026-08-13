@@ -76,17 +76,21 @@ fn error(message: &str) {
     emit("x", "\x1b[1;31m", message, true);
 }
 
-fn info(message: &str) {
-    emit("i", "\x1b[1;36m", message, true);
+fn line(message: &str) {
+    emit(None, "\x1b[1;33m", message, true);
 }
-
-fn emit(prefix: &str, color: &str, message: &str, color_message: bool) {
+    
+fn emit(prefix: Option<&str>, color: &str, message: &str, color_message: bool) {
     let mut stderr = io::stderr().lock();
     if stderr.is_terminal() {
+        let prefix_str = match prefix {
+            Some(p) => format!("[{p}] "),
+            None => String::new(),
+        };
         if color_message {
-            let _ = writeln!(stderr, "{color}[{prefix}] {message}\x1b[0m");
+            let _ = writeln!(stderr, "{color}{prefix_str}{message}\x1b[0m");
         } else {
-            let _ = writeln!(stderr, "{color}[{prefix}]\x1b[0m {message}");
+            let _ = writeln!(stderr, "{color}{prefix_str}\x1b[0m{message}");
         }
     } else {
         let _ = writeln!(stderr, "{message}");
@@ -425,32 +429,39 @@ fn run_optional(program: &str, args: &[&str]) {
 }
 
 fn emergency_shell() -> ! {
-    warning("You are now on emergency bash shell!");
-    info("> TIPS for debugging:");
-    warning("  - WARNING: Before retry or reboot, made sure you already FIX THE PROBLEM!");
-    info("  - Type 'exit' or Ctrl + D to retry or reboot.");
-    warning("  - WARNING: If you didn't fix the problem before retry or reboot, init will fall to emergency shell again!");
-    info("  - After reboot, edit '/etc/lkinit.d/init.rs' file before running lkinit again.");
-    info("Goodluck user! You can do it! ;>");
     unsafe {
         env::set_var("PATH", "/usr/sbin:/usr/bin:/sbin:/bin");
     }
-    loop {
-        let status = Command::new("/bin/cttyhack")
-            .arg("/bin/sh")
-            .status();
-        if status.is_err() || !status.as_ref().unwrap().success() {
-            let status_bash = Command::new("/bin/cttyhack")
-                .arg("/bin/bash")
-                .status();
-            if status_bash.is_err() || !status_bash.as_ref().unwrap().success() {
-                let sh = Command::new("/bin/sh").status();
-                if sh.is_err() || !sh.as_ref().unwrap().success() {
-                    let _ = Command::new("/bin/bash").status();
-                }
-            }
+    if !Path::new("/bin/sh").exists() && !Path::new("/bin/bash").exists() {
+        error("CRITICAL: Neither '/bin/sh' nor '/bin/bash' found in initramfs!");
+        error("Cannot start emergency shell! Halting the system safely....");
+        loop {
+            thread::sleep(Duration::from_secs(3600));
         }
-        thread::sleep(Duration::from_secs(1));
+    }
+    warning("You are now on emergency bash shell!");
+    line("");
+    line("------------------------------------------------------------------------------------------------------------------");
+    line("> TIPS for debugging:");
+    line("  - WARNING: Before retry or reboot, made sure you already FIX THE PROBLEM!");
+    line("  - WARNING: If you didn't fix the problem before retry or reboot, init will fall to emergency shell again!");
+    line("  - Type 'exit' or Ctrl + D to retry or reboot after fixing the problem.");
+    line("  - After reboot, edit '/etc/lkinit.d/init.rs' file before running lkinit again.");
+    line("------------------------------------------------------------------------------------------------------------------");
+    line("");
+    line("  Goodluck user. I know you can do it! ;>");
+    line("");
+    loop {
+        let sh_bin = if Path::new("/bin/bash").exists() { "/bin/bash" } else { "/bin/sh" };
+        let status = if Path::new("/bin/cttyhack").exists() {
+            Command::new("/bin/cttyhack").arg(sh_bin).env("TERM", "linux").status()
+        } else {
+            Command::new(sh_bin).arg("-i").env("TERM", "linux").status()
+        };
+        if status.is_err() {
+            warning("Failed to execute interactive shell! Retrying in 3 seconds....");
+        }
+        thread::sleep(Duration::from_secs(3));
     }
 }
 
