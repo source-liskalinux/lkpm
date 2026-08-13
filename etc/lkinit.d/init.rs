@@ -65,7 +65,7 @@ fn log(message: &str) {
 }
 
 fn success(message: &str) {
-    emit("✓", "\x1b[1;32m", message, true);
+    emit("+", "\x1b[1;32m", message, true);
 }
 
 fn warning(message: &str) {
@@ -73,19 +73,23 @@ fn warning(message: &str) {
 }
 
 fn error(message: &str) {
-    emit("✗", "\x1b[1;31m", message, true);
+    emit("x", "\x1b[1;31m", message, true);
+}
+
+fn info(message: &str) {
+    emit("i", "\x1b[1;36m", message, true);
 }
 
 fn emit(prefix: &str, color: &str, message: &str, color_message: bool) {
     let mut stderr = io::stderr().lock();
     if stderr.is_terminal() {
         if color_message {
-            let _ = writeln!(stderr, "{color}[{prefix}] {message}\x1b[0m");
+            let _ = writeln!(stderr, "{color}[  {prefix}  ] {message}\x1b[0m");
         } else {
-            let _ = writeln!(stderr, "{color}[{prefix}]\x1b[0m {message}");
+            let _ = writeln!(stderr, "{color}[  {prefix}  ]\x1b[0m {message}");
         }
     } else {
-        let _ = writeln!(stderr, "[{prefix}] {message}");
+        let _ = writeln!(stderr, "{message}");
     }
 }
 
@@ -419,12 +423,15 @@ fn run_optional(program: &str, args: &[&str]) {
 }
 
 fn emergency_shell() -> ! {
-    warning("You are now on emergency bash shells.");
-    warning("> TIPS for debugging:");
-    warning("  - Type 'exit' or Ctrl + D after fixing the issue to retry or reboot.");
-    env::set_var("PATH", "/usr/sbin:/usr/bin:/sbin:/bin");
+    warning("You are now on emergency bash shells!");
+    info("> TIPS for debugging:");
+    info("  - Type 'exit' or Ctrl + D after fixing the issue to retry or reboot.");
+    info("  - After reboot, edit '/etc/lkinit.d/init.rs' file before running lkinit again.");
+    unsafe {
+        env::set_var("PATH", "/usr/sbin:/usr/bin:/sbin:/bin");
+    }
     loop {
-        let mut child = Command::new("/bin/sh")
+        let child = Command::new("/bin/sh")
             .arg("-i")
             .env("TERM", "linux")
             .status();
