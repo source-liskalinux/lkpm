@@ -242,7 +242,7 @@ fn mount_real_root() -> InitResult<()> {
         }
         thread::sleep(Duration::from_millis(300));
     }
-    Err(format!("Could not mount {root} filesystem!").into())
+    Err(format!("could not mount {root} filesystem!").into())
 }
 
 fn mount_root_robust(device: &str, filesystem: Option<&str>, flags: Option<&str>) -> bool {
@@ -392,7 +392,7 @@ fn mount_if_needed(source: &str, target: &str, filesystem: &str) {
         return;
     }
     if let Err(error) = mount_fs(Some(source), target, Some(filesystem), 0, None) {
-        warning(&format!("Could not mount {target}! {error}"));
+        warning(&format!("could not mount {target}! {error}"));
     }
 }
 
@@ -433,14 +433,27 @@ fn emergency_shell() -> ! {
         env::set_var("PATH", "/usr/sbin:/usr/bin:/sbin:/bin");
     }
     loop {
-        let child = Command::new("/bin/sh")
-            .arg("-i")
+        let status = Command::new("/bin/cttyhack")
+            .arg("/bin/sh")
             .env("TERM", "linux")
             .status();
-        if child.is_err() {
-            let _ = Command::new("/bin/cttyhack")
-                .arg("/bin/sh")
+        if status.is_err() || !status.as_ref().unwrap().success() {
+            let status_bash = Command::new("/bin/cttyhack")
+                .arg("/bin/bash")
+                .env("TERM", "linux")
                 .status();
+            if status_bash.is_err() || !status_bash.as_ref().unwrap().success() {
+                let sh = Command::new("/bin/sh")
+                .arg("-i")
+                .env("TERM", "linux")
+                .status();
+                if sh.is_err() || !sh.as_ref().unwrap().success() {
+                    let _ = Command::new("/bin/bash")
+                    .arg("-i")
+                    .env("TERM", "linux")
+                    .status();
+                }
+            }
         }
         thread::sleep(Duration::from_secs(1));
     }
