@@ -9,8 +9,8 @@ description = "Early initramfs init program for Liska Linux"
 # Add depedencies if needed
 
 [profile.release]
-opt-level = "z"
-lto = true
-codegen-units = 1
-panic = "abort"
-strip = true
+opt-level = 2
+panic = "unwind"
+lto = "thin"
+codegen-units = 16
+strip = false
