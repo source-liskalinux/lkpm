@@ -61,19 +61,19 @@ fn run() -> InitResult<()> {
 }
 
 fn log(message: &str) {
-    emit("i", "\x1b[1;36m", message, false);
+    emit(Some("i"), "\x1b[1;36m", message, false);
 }
 
 fn success(message: &str) {
-    emit("+", "\x1b[1;32m", message, true);
+    emit(Some("+"), "\x1b[1;32m", message, true);
 }
 
 fn warning(message: &str) {
-    emit("!", "\x1b[1;33m", message, true);
+    emit(Some("!"), "\x1b[1;33m", message, true);
 }
 
 fn error(message: &str) {
-    emit("x", "\x1b[1;31m", message, true);
+    emit(Some("x"), "\x1b[1;31m", message, true);
 }
 
 fn line(message: &str) {
