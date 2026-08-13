@@ -438,23 +438,15 @@ fn emergency_shell() -> ! {
     loop {
         let status = Command::new("/bin/cttyhack")
             .arg("/bin/sh")
-            .env("TERM", "linux")
             .status();
         if status.is_err() || !status.as_ref().unwrap().success() {
             let status_bash = Command::new("/bin/cttyhack")
                 .arg("/bin/bash")
-                .env("TERM", "linux")
                 .status();
             if status_bash.is_err() || !status_bash.as_ref().unwrap().success() {
-                let sh = Command::new("/bin/sh")
-                .arg("-i")
-                .env("TERM", "linux")
-                .status();
+                let sh = Command::new("/bin/sh").status();
                 if sh.is_err() || !sh.as_ref().unwrap().success() {
-                    let _ = Command::new("/bin/bash")
-                    .arg("-i")
-                    .env("TERM", "linux")
-                    .status();
+                    let _ = Command::new("/bin/bash").status();
                 }
             }
         }
