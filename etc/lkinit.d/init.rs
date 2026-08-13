@@ -226,7 +226,7 @@ fn mount_real_root() -> InitResult<()> {
         run_optional("/bin/mdev", &["-s"]);
         let root_device = resolve_device(&root);
         if Path::new(&root_device).exists() {
-            log(&format!("Attempting to mount {root_device} on {NEW_ROOT} (Attempt {attempt})...."));
+            log(&format!("Attempting to mount {root_device} on {NEW_ROOT} ({attempt} attempt)...."));
             if mount_root_robust(
                 &root_device,
                 root_filesystem.as_deref(),
@@ -238,7 +238,7 @@ fn mount_real_root() -> InitResult<()> {
         }
         thread::sleep(Duration::from_millis(300));
     }
-    Err(format!("Could not mount root filesystem target '{root}'!").into())
+    Err(format!("Could not mount {root} filesystem!").into())
 }
 
 fn mount_root_robust(device: &str, filesystem: Option<&str>, flags: Option<&str>) -> bool {
@@ -354,17 +354,20 @@ fn find_init_program(sysroot: &str) -> Option<String> {
 }
 
 fn switch_root(sysroot: &str, init_path: &str) -> InitResult<()> {
-    let sysroot_path = CString::new(sysroot)?;
-    let root_path = CString::new("/")?;
     env::set_current_dir(sysroot)?;
+    let current_dir = CString::new(".")?;
+    let root_path = CString::new("/")?;
     unsafe {
-        if mount(sysroot_path.as_ptr(), root_path.as_ptr(), std::ptr::null(), MS_MOVE, std::ptr::null()) != 0 {
-            warning("Failed to move mounted root! Initializing fallback chroot...");
+        if mount(current_dir.as_ptr(), root_path.as_ptr(), std::ptr::null(), MS_MOVE, std::ptr::null()) != 0 {
+            warning("MS_MOVE failed! Attempting fallback chroot....");
         }
     }
     chroot_to(".")?;
     env::set_current_dir("/")?;
-    exec_program(init_path)?;
+    if let Err(e) = exec_program(init_path) {
+        error(&format!("Failed to exec {init_path}: {e}"));
+        return Err(e.into());
+    }
     unreachable!("Execv returned success");
 }
 
@@ -416,6 +419,7 @@ fn run_optional(program: &str, args: &[&str]) {
 }
 
 fn emergency_shell() -> ! {
+    warning("You are now on emergency bash shells.");
     warning("> TIPS for debugging:");
     warning("  - Type 'exit' or Ctrl + D after fixing the issue to retry or reboot.");
     env::set_var("PATH", "/usr/sbin:/usr/bin:/sbin:/bin");
@@ -474,9 +478,12 @@ fn chroot_to(path: &str) -> io::Result<()> {
 }
 
 fn exec_program(program: &str) -> io::Result<()> {
-    let program = CString::new(program)?;
-    let argv = [program.as_ptr(), std::ptr::null()];
-    syscall_result(unsafe { execv(program.as_ptr(), argv.as_ptr()) })
+    let prog_cstr = CString::new(program)?;
+    let argv: [*const c_char; 2] = [prog_cstr.as_ptr(), std::ptr::null()];
+    unsafe {
+        execv(prog_cstr.as_ptr(), argv.as_ptr());
+    }
+    Err(io::Error::last_os_error())
 }
 
 fn syscall_result(result: c_int) -> io::Result<()> {
