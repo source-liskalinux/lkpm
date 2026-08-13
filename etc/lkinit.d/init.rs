@@ -36,7 +36,7 @@ unsafe extern "C" {
 fn main() {
     if let Err(err) = run() {
         error(&format!("CRITICAL: {err}"));
-        error("Initializing emergency shell!");
+        error("Initializing emergency shell....");
         emergency_shell();
     }
 }
@@ -368,11 +368,18 @@ fn switch_root(sysroot: &str, init_path: &str) -> InitResult<()> {
     }
     chroot_to(".")?;
     env::set_current_dir("/")?;
-    if let Err(e) = exec_program(init_path) {
-        error(&format!("Failed to exec {init_path}: {e}"));
-        return Err(e.into());
+    let status = Command::new(init_path).status();
+    match status {
+        Ok(st) => {
+            error(&format!("{init_path} exited with status: {st}"));
+        }
+        Err(e) => {
+            error(&format!("Failed to execute {init_path}: {e}"));
+        }
     }
-    unreachable!("Execv returned success");
+    error("CRITICAL: Init process stopped! Emergency shell will be use to prevent kernel panic!");
+    error("Initializing emergency shell....");
+    emergency_shell();
 }
 
 fn mount_pseudo_filesystems() {
