@@ -368,18 +368,13 @@ fn switch_root(sysroot: &str, init_path: &str) -> InitResult<()> {
     }
     chroot_to(".")?;
     env::set_current_dir("/")?;
-    let status = Command::new(init_path).status();
-    match status {
-        Ok(st) => {
-            error(&format!("{init_path} exited with status: {st}"));
-        }
-        Err(e) => {
-            error(&format!("Failed to execute {init_path}: {e}"));
-        }
+    if let Err(e) = exec_program(init_path) {
+        error(&format!("CRITICAL: Failed to exec {init_path}: {e}"));
+        error("CRITICAL: Failed to replace PID 1 process! Emergency shell will be initialize to prevent kernel panic!");
+        error("Initializing emergency shell....");
+        emergency_shell();
     }
-    error("CRITICAL: Init process stopped! Emergency shell will be use to prevent kernel panic!");
-    error("Initializing emergency shell....");
-    emergency_shell();
+    unreachable!("Execv returned success");
 }
 
 fn mount_pseudo_filesystems() {
