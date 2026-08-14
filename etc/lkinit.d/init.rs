@@ -428,7 +428,7 @@ fn run_optional(program: &str, args: &[&str]) {
         .status();
 }
 
-fn emergency_shell() {
+fn emergency_shell() -> ! {
     unsafe {
         env::set_var("PATH", "/usr/sbin:/usr/bin:/sbin:/bin");
     }
@@ -454,11 +454,15 @@ fn emergency_shell() {
     line("  Goodluck. I know you can do it! ;>");
     line("");
     thread::sleep(Duration::from_secs(1));
-    let _ = if Path::new("/bin/busybox").exists() {
-        let _ = Command::new("/bin/busybox").arg("sh").status();
-    } else {
-        let _ = Command::new("/usr/bin/busybox").arg("sh").status();
-    };
+    loop {
+        let _ = if Path::new("/bin/busybox").exists() {
+            let _ = Command::new("/bin/busybox").arg("sh").status();
+        } else {
+            let _ = Command::new("/usr/bin/busybox").arg("sh").status();
+        };
+        warning("Emergency shell exited! Restarting shell....");
+        thread::sleep(Duration::from_secs(1));
+    }
 }
 
 fn mount_fs(
