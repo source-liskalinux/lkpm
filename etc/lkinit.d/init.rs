@@ -36,7 +36,7 @@ unsafe extern "C" {
 fn main() {
     if let Err(err) = run() {
         error(&format!("CRITICAL: {err}"));
-        error("Initializing emergency shell....");
+        warning("Initializing emergency shell....");
         emergency_shell();
     }
 }
@@ -375,7 +375,7 @@ fn switch_root(sysroot: &str, init_path: &str) -> InitResult<()> {
     if let Err(e) = exec_program(init_path) {
         error(&format!("CRITICAL: Failed to exec {init_path}: {e}"));
         error("CRITICAL: Failed to replace PID 1 process! Emergency shell will be initialize to prevent kernel panic!");
-        error("Initializing emergency shell....");
+        warning("Initializing emergency shell....");
         emergency_shell();
     }
     unreachable!("Execv returned success");
@@ -432,8 +432,8 @@ fn emergency_shell() -> ! {
     unsafe {
         env::set_var("PATH", "/usr/sbin:/usr/bin:/sbin:/bin");
     }
-    if !Path::new("/bin/sh").exists() && !Path::new("/bin/bash").exists() {
-        error("CRITICAL: Neither '/bin/sh' nor '/bin/bash' found in initramfs!");
+    if !Path::new("/bin/busybox").exists() && !Path::new("/usr/bin/busybox").exists() {
+        error("CRITICAL: busybox not found in initramfs!");
         error("Cannot start emergency shell! Halting the system safely....");
         loop {
             thread::sleep(Duration::from_secs(3600));
@@ -442,26 +442,27 @@ fn emergency_shell() -> ! {
     warning("You are now on emergency bash shell!");
     line("");
     line("------------------------------------------------------------------------------------------------------------------");
+    line("");
     line("> TIPS for debugging:");
     line("  - WARNING: Before retry or reboot, made sure you already FIX THE PROBLEM!");
     line("  - WARNING: If you didn't fix the problem before retry or reboot, init will fall to emergency shell again!");
     line("  - Type 'exit' or Ctrl + D to retry or reboot after fixing the problem.");
     line("  - After reboot, edit '/etc/lkinit.d/init.rs' file before running lkinit again.");
+    line("");
     line("------------------------------------------------------------------------------------------------------------------");
     line("");
-    line("  Goodluck user. I know you can do it! ;>");
+    line("  Goodluck. I know you can do it! ;>");
     line("");
+    thread::sleep(Duration::from_secs(2));
+    let busybox_path = if Path::new("/usr/bin/busybox").exists() {
+        "/usr/bin/busybox"
+    } else {
+        "/bin/busybox"
+    };
     loop {
-        let sh_bin = if Path::new("/bin/bash").exists() { "/bin/bash" } else { "/bin/sh" };
-        let status = if Path::new("/bin/cttyhack").exists() {
-            Command::new("/bin/cttyhack").arg(sh_bin).env("TERM", "linux").status()
-        } else {
-            Command::new(sh_bin).arg("-i").env("TERM", "linux").status()
-        };
-        if status.is_err() {
-            warning("Failed to execute interactive shell! Retrying in 3 seconds....");
+        if Command::new(busybox_path).args(&["cttyhack", "sh"]).status().is_err() {
+            let _ = Command::new(busybox_path).arg("sh").status();
         }
-        thread::sleep(Duration::from_secs(3));
     }
 }
 
