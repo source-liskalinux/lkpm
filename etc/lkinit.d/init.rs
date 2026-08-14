@@ -453,17 +453,12 @@ fn emergency_shell() -> ! {
     line("");
     line("  Goodluck. I know you can do it! ;>");
     line("");
-    thread::sleep(Duration::from_secs(2));
-    let busybox_path = if Path::new("/usr/bin/busybox").exists() {
-        "/usr/bin/busybox"
+    thread::sleep(Duration::from_secs(1));
+    let _ = if Path::new("/bin/busybox").exists() {
+        let _ = Command::new("/bin/busybox").arg("sh").status();
     } else {
-        "/bin/busybox"
+        let _ = Command::new("/usr/bin/busybox").arg("sh").status();
     };
-    loop {
-        if Command::new(busybox_path).args(&["cttyhack", "sh"]).status().is_err() {
-            let _ = Command::new(busybox_path).arg("sh").status();
-        }
-    }
 }
 
 fn mount_fs(
