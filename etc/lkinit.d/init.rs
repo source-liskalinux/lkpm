@@ -428,7 +428,7 @@ fn run_optional(program: &str, args: &[&str]) {
         .status();
 }
 
-fn emergency_shell() -> ! {
+fn emergency_shell() {
     unsafe {
         env::set_var("PATH", "/usr/sbin:/usr/bin:/sbin:/bin");
     }
