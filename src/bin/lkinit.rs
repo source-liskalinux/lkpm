@@ -19,9 +19,9 @@ fn require_root() {
 
 fn run_command(cmd: &str, args: &[&str]) -> Result<(), String> {
     let status = Command::new(cmd)
-    .args(args)
-    .status()
-    .map_err(|err| format!("Could not start {}: {}", cmd, err))?;
+        .args(args)
+        .status()
+        .map_err(|err| format!("Could not start {}: {}", cmd, err))?;
     if status.success() { Ok(()) } else { Err(format!("Command {} failed to run!", cmd)) }
 }
 
@@ -32,16 +32,15 @@ fn pack_initramfs_with_progress(temp_ramdisk: &Path, output_img: &Path) -> Resul
         if let Ok(entries) = fs::read_dir(dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if let Ok(rel) = path.strip_prefix(base) {
-                    paths.push(rel.display().to_string());
-                }
-                if let Ok(meta) = entry.metadata() {
-                    if meta.is_file() {
-                        *total_size += meta.len();
+                if let Ok(sym_meta) = entry.symlink_metadata() {
+                    if let Ok(rel) = path.strip_prefix(base) {
+                        paths.push(rel.display().to_string());
                     }
-                }
-                if path.is_dir() {
-                    collect_files(&path, base, paths, total_size);
+                    if sym_meta.is_file() {
+                        *total_size += sym_meta.len();
+                    } else if sym_meta.is_dir() {
+                        collect_files(&path, base, paths, total_size);
+                    }
                 }
             }
         }
@@ -54,24 +53,24 @@ fn pack_initramfs_with_progress(temp_ramdisk: &Path, output_img: &Path) -> Resul
             "{prefix:.bold} [{elapsed_precise}] [{bar:75.bright.cyan/blue}] {percent}% | {bytes}/{total_bytes} ({eta})"
         )
         .unwrap()
-        .progress_chars("#<*")
+        .progress_chars("#•-")
     );
     pb.set_prefix("Packing initramfs:");
     let mut cpio = Command::new("cpio")
-    .args(&["-H", "newc", "-o", "--quiet"])
-    .current_dir(temp_ramdisk)
-    .stdin(Stdio::piped())
-    .stdout(Stdio::piped())
-    .stderr(Stdio::null())
-    .spawn()
-    .map_err(|e| format!("Failed to run cpio: {}", e))?;
+        .args(&["-H", "newc", "-o", "--quiet"])
+        .current_dir(temp_ramdisk)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("Failed to run cpio: {}", e))?;
     let mut zstd = Command::new("zstd")
-    .args(&["-19", "-T0", "-q", "-f", "-o", output_img.to_str().unwrap()])
-    .stdin(Stdio::piped())
-    .stdout(Stdio::null())
-    .stderr(Stdio::null())
-    .spawn()
-    .map_err(|e| format!("Failed to run zstd: {}", e))?;
+        .args(&["-19", "-T0", "-q", "-f", "-o", output_img.to_str().unwrap()])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("Failed to run zstd: {}", e))?;
     let mut cpio_stdin = cpio.stdin.take().ok_or("Failed to open stdin cpio!")?;
     std::thread::spawn(move || {
         for path in paths {
@@ -106,11 +105,10 @@ fn compile_init_template(rootfs: &Path, target_init_bin: &Path) -> Result<(), St
             PathBuf::from("/etc/lkinit.d/Cargo.toml"),
         )
     };
-
     if !template_path.exists() || !cargo_path.exists() {
         return Err("CRITICAL: Init template (init.rs) or Cargo.toml not found!".into());
     }
-    let build_dir = PathBuf::from("/tmp/lkinit");
+    let build_dir = PathBuf::from("/tmp/lkinit/init");
     fs::remove_dir_all(&build_dir).ok();
     fs::create_dir_all(build_dir.join("src")).map_err(|e| e.to_string())?;
     fs::copy(&template_path, build_dir.join("src/main.rs"))
@@ -119,7 +117,7 @@ fn compile_init_template(rootfs: &Path, target_init_bin: &Path) -> Result<(), St
         .map_err(|e| format!("Failed to copy Cargo.toml template: {}", e))?;
     let cargo_default = Command::new("cargo")
         .env("RUSTFLAGS", "-C target-feature=+crt-static")
-        .args(&["build", "--manifest-path", "/tmp/lkinit/Cargo.toml", "--release"])
+        .args(&["build", "--manifest-path", "/tmp/lkinit/init/Cargo.toml", "--release"])
         .status()
         .map_err(|e| format!("Cargo compilation error: {}", e))?;
     if !cargo_default.success() {
@@ -127,7 +125,7 @@ fn compile_init_template(rootfs: &Path, target_init_bin: &Path) -> Result<(), St
     }
     let compiled_binary = build_dir.join("target/release/init");
     fs::copy(&compiled_binary, target_init_bin)
-    .map_err(|e| format!("Failed to copy compiled binary to init: {}", e))?;
+        .map_err(|e| format!("Failed to copy compiled binary to init: {}", e))?;
     fs::remove_dir_all(&build_dir).ok();
     Ok(())
 }
@@ -167,17 +165,21 @@ pub fn generate_liska_initramfs(rootfs: &Path, output_img: &Path) -> Result<(), 
     info("Uncompressing kernel modules....");
     let target_kernel_dir = dst_mod_dir.join(&kernel_version);
     let _ = run_command("sh", &["-c", &format!("find {} -name '*.ko.zst' -exec unzstd -q --rm -f {{}} \\;", target_kernel_dir.display())]);
-    let _ = run_command("mkdir", &["-p", temp_ramdisk.join("lib").to_str().unwrap()]);
-    let _ = run_command("ln", &["-sf", "../usr/lib/modules", temp_ramdisk.join("lib/modules").to_str().unwrap()]);
     info("Regenerating module dependency index....");
     let _ = run_command("depmod", &["-a", "-b", temp_ramdisk.to_str().unwrap(), &kernel_version]);
     let busybox_path = rootfs.join("usr/bin/busybox");
     let busybox_src = if busybox_path.exists() { busybox_path } else { rootfs.join("bin/busybox") };
     if busybox_src.exists() {
         info("Copying busybox to initramfs....");
-        fs::copy(busybox_src, temp_ramdisk.join("bin/busybox")).ok();
-        for link in &["sh", "bash", "mount", "umount", "mdev", "insmod", "modprobe", "blkid", "losetup", "mknod"] {
-            let link_path = temp_ramdisk.join("bin").join(link);
+        fs::copy(busybox_src, temp_ramdisk.join("usr/bin/busybox")).ok();
+        let busybox_links = &[
+            "sh", "bash", "cttyhack", "mount", "umount", "mdev", 
+            "insmod", "modprobe", "blkid", "losetup", "mknod",
+            "ls", "cat", "echo", "clear", "mkdir", "rm", "cp", 
+            "mv"
+        ];
+        for link in busybox_links {
+            let link_path = temp_ramdisk.join("usr/bin").join(link);
             let _ = fs::remove_file(&link_path);
             let _ = run_command("ln", &["-sf", "busybox", link_path.to_str().unwrap()]);
             let _ = run_command("chmod", &["+x", link_path.to_str().unwrap()]);
