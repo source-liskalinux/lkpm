@@ -32,7 +32,7 @@ fn pack_initramfs_with_progress(temp_ramdisk: &Path, output_img: &Path) -> Resul
         if let Ok(entries) = fs::read_dir(dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if let Ok(sym_meta) = entry.symlink_metadata() {
+                if let Ok(sym_meta) = path.symlink_metadata() {
                     if let Ok(rel) = path.strip_prefix(base) {
                         paths.push(rel.display().to_string());
                     }
