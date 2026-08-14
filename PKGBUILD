@@ -13,13 +13,13 @@ license=('GPL-3.0-or-later')
 depends=(
     'ca-certificates' 'sqlite' 'zstd' 'xz' 'busybox' 'cpio' 'kmod' 'bash'
     'curl' 'tar' 'coreutils' 'fakeroot' 'gzip' 'bzip2' 'unzip'
-    'p7zip' 'rust'
+    'p7zip' 'rustup'
 )
 optdepends=(
     'git' 'make' 'gcc' 'clang' 'python' 'perl' 'ruby' 'nodejs'
     'npm' 'yarn' 'go'
 )
-makedepends=('rust' 'pkgconf' 'sqlite')
+makedepends=('rustup' 'pkgconf' 'sqlite')
 
 build() {
     echo "--> [BUILD] Compiling lkpm, lkmake, lkinit, and lkchroot...."
