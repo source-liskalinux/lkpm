@@ -94,6 +94,7 @@ pub fn canonical_package_name(package: &str) -> &str {
         "systemd-tests" => "lksystem-tests",
         "systemd-ukify" => "lksystem",
         "bsdtar" => "libarchive",
+        "rust" => "rustup",
         _ => package,
     }
 }
