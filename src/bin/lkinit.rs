@@ -115,15 +115,22 @@ fn compile_init_template(rootfs: &Path, target_init_bin: &Path) -> Result<(), St
         .map_err(|e| format!("Failed to copy init.rs template: {}", e))?;
     fs::copy(&cargo_path, build_dir.join("Cargo.toml"))
         .map_err(|e| format!("Failed to copy Cargo.toml template: {}", e))?;
+    let _ = Command::new("rustup").args(&["target", "add", "x86_64-unknown-linux-musl"]).status();
     let cargo_default = Command::new("cargo")
+        .env("RUSTUP_TOOLCHAIN", "stable")
         .env("RUSTFLAGS", "-C target-feature=+crt-static")
-        .args(&["build", "--manifest-path", "/tmp/lkinit/init/Cargo.toml", "--release"])
+        .args(&[
+            "build",
+            "--manifest-path", "/tmp/lkinit/init/Cargo.toml",
+            "--release",
+            "--target", "x86_64-unknown-linux-musl"
+        ])
         .status()
         .map_err(|e| format!("Cargo compilation error: {}", e))?;
     if !cargo_default.success() {
         return Err("Failed to compile /etc/lkinit.d/init.rs!".into());
     }
-    let compiled_binary = build_dir.join("target/release/init");
+    let compiled_binary = build_dir.join("target/x86_64-unknown-linux-musl/release/init");
     fs::copy(&compiled_binary, target_init_bin)
         .map_err(|e| format!("Failed to copy compiled binary to init: {}", e))?;
     fs::remove_dir_all(&build_dir).ok();
