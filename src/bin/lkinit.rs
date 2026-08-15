@@ -115,7 +115,14 @@ fn compile_init_template(rootfs: &Path, target_init_bin: &Path) -> Result<(), St
         .map_err(|e| format!("Failed to copy init.rs template: {}", e))?;
     fs::copy(&cargo_path, build_dir.join("Cargo.toml"))
         .map_err(|e| format!("Failed to copy Cargo.toml template: {}", e))?;
-    let _ = Command::new("rustup").args(&["target", "add", "x86_64-unknown-linux-musl"]).status();
+    let _ = Command::new("rustup")
+        .env("RUSTUP_TOOLCHAIN", "stable")
+        .args(&["default", "stable"])
+        .status();
+    let _ = Command::new("rustup")
+        .env("RUSTUP_TOOLCHAIN", "stable")
+        .args(&["target", "add", "x86_64-unknown-linux-musl"])
+        .status();
     let cargo_default = Command::new("cargo")
         .env("RUSTUP_TOOLCHAIN", "stable")
         .env("RUSTFLAGS", "-C target-feature=+crt-static")
