@@ -15,6 +15,7 @@ const NEW_ROOT: &str = "/new_root";
 const BOOT_MOUNT: &str = "/run/liska/bootmnt";
 const SOURCE_SQUASHFS: &str = "/src_sfs";
 const COW: &str = "/cow";
+const PATH_ENV: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
 const MS_RDONLY: c_ulong = 1;
 const MS_MOVE: c_ulong = 8192;
@@ -143,10 +144,12 @@ fn setup_loop_device(file_path: &str) -> InitResult<String> {
     if !Path::new("/dev/loop0").exists() {
         let _ = Command::new("/bin/mknod")
             .args(["/dev/loop0", "b", "7", "0"])
+            .env("PATH", PATH_ENV)
             .status();
     }
     let status = Command::new("losetup")
         .args(["/dev/loop0", file_path])
+        .env("PATH", PATH_ENV)
         .status();
     if let Ok(st) = status {
         if st.success() {
@@ -155,9 +158,14 @@ fn setup_loop_device(file_path: &str) -> InitResult<String> {
     }
     let status_auto = Command::new("losetup")
         .args(["-f", file_path])
+        .env("PATH", PATH_ENV)
         .status();
     if status_auto.is_ok() && status_auto.unwrap().success() {
-        if let Ok(output) = Command::new("losetup").args(["-j", file_path]).output() {
+        if let Ok(output) = Command::new("losetup")
+            .args(["-j", file_path])
+            .env("PATH", PATH_ENV)
+            .output()
+        {
             let out_str = String::from_utf8_lossy(&output.stdout);
             if let Some(dev) = out_str.split(':').next() {
                 if !dev.trim().is_empty() {
@@ -372,6 +380,14 @@ fn switch_root(sysroot: &str, init_path: &str) -> InitResult<()> {
     }
     chroot_to(".")?;
     env::set_current_dir("/")?;
+    // execv() has no envp of its own, it just inherits whatever's already
+    // in this process's environment. Nothing earlier in this file ever sets
+    // PATH on the normal boot path (only emergency_shell() did), so make
+    // sure the new PID 1 (lksystem or whatever init that has been found) 
+    // actually gets a usable PATH instead of starting with none at all.
+    unsafe {
+        env::set_var("PATH", PATH_ENV);
+    }
     if let Err(e) = exec_program(init_path) {
         error(&format!("CRITICAL: Failed to exec {init_path}: {e}"));
         error("CRITICAL: Failed to replace PID 1 process! Emergency shell will be initialize to prevent kernel panic!");
@@ -423,6 +439,7 @@ fn create_dirs<const N: usize>(paths: [&str; N]) {
 fn run_optional(program: &str, args: &[&str]) {
     let _ = Command::new(program)
         .args(args)
+        .env("PATH", PATH_ENV)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status();
@@ -430,16 +447,28 @@ fn run_optional(program: &str, args: &[&str]) {
 
 fn emergency_shell() -> ! {
     unsafe {
-        env::set_var("PATH", "/usr/sbin:/usr/bin:/sbin:/bin");
+        env::set_var("PATH", PATH_ENV);
     }
-    if !Path::new("/bin/busybox").exists() && !Path::new("/usr/bin/busybox").exists() {
-        error("CRITICAL: busybox not found in initramfs!");
-        error("Cannot start emergency shell! Halting the system safely....");
+    const SHELL_CANDIDATES: [(&str, Option<&str>); 6] = [
+        ("/bin/cttyhack", Some("/bin/sh")),
+        ("/bin/cttyhack", Some("/bin/bash")),
+        ("/bin/sh", Some("-i")),
+        ("/bin/bash", Some("-i")),
+        ("/bin/busybox", Some("sh")),
+        ("/usr/bin/busybox", Some("sh")),
+    ];
+    if !SHELL_CANDIDATES
+        .iter()
+        .any(|(program, _)| Path::new(program).exists())
+    {
+        error("CRITICAL: No binary shell found in initramfs!");
+        error("CRITICAL: Cannot start emergency shell! Init will be halting to prevent kernel panic!");
+        error("WARNING: Halting the system safely....")
         loop {
             thread::sleep(Duration::from_secs(3600));
         }
     }
-    warning("You are now on emergency bash shell!");
+    error("You are now on emergency bash shell!");
     line("");
     line("------------------------------------------------------------------------------------------------------------------");
     line("");
@@ -455,12 +484,24 @@ fn emergency_shell() -> ! {
     line("");
     thread::sleep(Duration::from_secs(1));
     loop {
-        let _ = if Path::new("/bin/busybox").exists() {
-            let _ = Command::new("/bin/busybox").arg("sh").status();
-        } else {
-            let _ = Command::new("/usr/bin/busybox").arg("sh").status();
-        };
-        warning("Emergency shell exited! Restarting shell....");
+        for (program, arg) in SHELL_CANDIDATES {
+            let mut command = Command::new(program);
+            if let Some(arg) = arg {
+                command.arg(arg);
+            }
+            command.env("PATH", PATH_ENV).env("TERM", "linux");
+            match command.status() {
+                Ok(status) if status.success() => {
+                    warning("Emergency shell exited! Restarting shell....");
+                }
+                Ok(status) => {
+                    warning(&format!("{program} exited with status {status}!"));
+                }
+                Err(error) => {
+                    warning(&format!("Cannot start {program}! Err: {error}."));
+                }
+            }
+        }
         thread::sleep(Duration::from_secs(1));
     }
 }
