@@ -463,7 +463,7 @@ fn emergency_shell() -> ! {
     {
         error("CRITICAL: No binary shell found in initramfs!");
         error("CRITICAL: Cannot start emergency shell! Init will be halting to prevent kernel panic!");
-        error("WARNING: Halting the system safely....")
+        error("WARNING: Halting the system safely....");
         loop {
             thread::sleep(Duration::from_secs(3600));
         }
