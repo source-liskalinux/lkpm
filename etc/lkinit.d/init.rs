@@ -32,6 +32,8 @@ unsafe extern "C" {
     fn umount(target: *const c_char) -> c_int;
     fn chroot(path: *const c_char) -> c_int;
     fn execv(path: *const c_char, argv: *const *const c_char) -> c_int;
+    fn reboot(magic: c_int, magic2: c_int, cmd: c_int, arg: *const c_void) -> c_int;
+    fn sync();
 }
 
 fn main() {
@@ -330,15 +332,31 @@ fn resolve_device(target: &str) -> String {
     if target.starts_with("/dev/") && Path::new(target).exists() {
         return target.to_owned();
     }
-    if let Ok(output) = Command::new("blkid")
-        .args(["-t", target, "-o", "device"])
-        .env("PATH", PATH_ENV)
-        .output()
-    {
-        if output.status.success() {
-            let dev = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !dev.is_empty() && Path::new(&dev).exists() {
-                return dev;
+    run_optional("/bin/mdev", &["-s"]);
+    if let Some(uuid) = target.strip_prefix("UUID=") {
+        if let Ok(output) = Command::new("blkid")
+            .args(["-U", uuid])
+            .env("PATH", PATH_ENV)
+            .output()
+        {
+            if output.status.success() {
+                let dev = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !dev.is_empty() && Path::new(&dev).exists() {
+                    return dev;
+                }
+            }
+        }
+    } else if let Some(label) = target.strip_prefix("LABEL=") {
+        if let Ok(output) = Command::new("blkid")
+            .args(["-L", label])
+            .env("PATH", PATH_ENV)
+            .output()
+        {
+            if output.status.success() {
+                let dev = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !dev.is_empty() && Path::new(&dev).exists() {
+                    return dev;
+                }
             }
         }
     }
@@ -474,6 +492,49 @@ fn run_optional(program: &str, args: &[&str]) {
         .status();
 }
 
+fn new_root_is_mounted() -> bool {
+    is_mount_point(NEW_ROOT)
+}
+
+fn do_reboot() -> ! {
+    const LINUX_REBOOT_MAGIC1: c_int = 0xfee1deadu32 as c_int;
+    const LINUX_REBOOT_MAGIC2: c_int = 0x28121969u32 as c_int;
+    const LINUX_REBOOT_CMD_RESTART: c_int = 0x01234567u32 as c_int;
+    warning("Syncing disks and rebooting....");
+    unsafe { sync() };
+    thread::sleep(Duration::from_secs(1));
+    unsafe { reboot(LINUX_REBOOT_MAGIC1, LINUX_REBOOT_MAGIC2, LINUX_REBOOT_CMD_RESTART, std::ptr::null()) };
+    loop {
+        thread::sleep(Duration::from_secs(3600));
+    }
+}
+
+fn try_resume_boot() {
+    if new_root_is_mounted() {
+        warning("Detected mounted /new_root! Attempting to resume boot....");
+        for dir in ["dev", "proc", "sys", "run"] {
+            let old = format!("/{dir}");
+            let new = format!("{NEW_ROOT}/{dir}");
+            let _ = fs::create_dir_all(&new);
+            let _ = mount_fs(Some(&old), &new, None, MS_MOVE, None);
+        }
+        match find_init_program(NEW_ROOT) {
+            Some(init) => {
+                success(&format!("Resuming boot with {init}...."));
+                if let Err(e) = switch_root(NEW_ROOT, &init) {
+                    error(&format!("CRITICAL: switch_root failed: {e}!"));
+                }
+            }
+            None => {
+                error("No init found in /new_root even after manual fix!");
+            }
+        }
+    } else {
+        warning("/new_root is not mounted!");
+    }
+    do_reboot();
+}
+
 fn emergency_shell() -> ! {
     unsafe {
         env::set_var("PATH", PATH_ENV);
@@ -491,20 +552,20 @@ fn emergency_shell() -> ! {
         .any(|(program, _)| Path::new(program).exists())
     {
         error("CRITICAL: No binary shell found in initramfs!");
-        error("CRITICAL: Cannot start emergency shell! Init will be halting to prevent kernel panic!");
-        error("WARNING: Halting the system safely....");
-        loop {
-            thread::sleep(Duration::from_secs(3600));
-        }
+        error("CRITICAL: Cannot start emergency shell! Rebooting in 10 seconds....");
+        thread::sleep(Duration::from_secs(10));
+        do_reboot();
     }
-    error("You are now on emergency bash shell!");
+    warning("You are now on emergency bash shell!");
     line("");
     line("------------------------------------------------------------------------------------------------------------------");
     line("");
     line("> TIPS for debugging:");
     line("  - WARNING: Before retry or reboot, made sure you already FIX THE PROBLEM!");
     line("  - WARNING: If you didn't fix the problem before retry or reboot, init will fall to emergency shell again!");
-    line("  - Type 'exit' or Ctrl + D to retry or reboot after fixing the problem.");
+    line("  - Type 'exit' or Ctrl + D when done:");
+    line("     * If /new_root is mounted -> init will resume boot automatically.");
+    line("     * If /new_root is NOT yet mounted -> system will reboot for a clean retry.");
     line("  - After reboot, edit '/etc/lkinit.d/init.rs' file before running lkinit again.");
     line("");
     line("------------------------------------------------------------------------------------------------------------------");
@@ -512,27 +573,28 @@ fn emergency_shell() -> ! {
     line("  Goodluck. I know you can do it! ;>");
     line("");
     thread::sleep(Duration::from_secs(1));
-    loop {
-        for (program, arg) in SHELL_CANDIDATES {
-            let mut command = Command::new(program);
-            if let Some(arg) = arg {
-                command.arg(arg);
+    for (program, arg) in SHELL_CANDIDATES {
+        if !Path::new(program).exists() {
+            continue;
+        }
+        let mut command = Command::new(program);
+        if let Some(arg) = arg {
+            command.arg(arg);
+        }
+        command.env("PATH", PATH_ENV).env("TERM", "linux");
+        match command.status() {
+            Ok(_) => {
+                try_resume_boot();
             }
-            command.env("PATH", PATH_ENV).env("TERM", "linux");
-            match command.status() {
-                Ok(status) if status.success() => {
-                    warning("Emergency shell exited! Restarting shell....");
-                }
-                Ok(status) => {
-                    warning(&format!("{program} exited with status {status}!"));
-                }
-                Err(error) => {
-                    warning(&format!("Cannot start {program}! Err: {error}."));
-                }
+            Err(e) => {
+                warning(&format!("Cannot start {program}! Err: {e}. Trying next...."));
+                continue;
             }
         }
-        thread::sleep(Duration::from_secs(1));
     }
+    error("CRITICAL: Every shell candidate failed to start! Rebooting in 10 seconds....");
+    thread::sleep(Duration::from_secs(10));
+    do_reboot();
 }
 
 fn mount_fs(
