@@ -165,13 +165,14 @@ pub fn generate_liska_initramfs(rootfs: &Path, output_img: &Path) -> Result<(), 
     fs::remove_dir_all(&temp_ramdisk).ok();
     let dirs = &[
         "dev", "proc", "sys", "root", "run", "etc",
-        "usr/bin", "usr/sbin", "usr/lib", "usr/lib/modules"
+        "usr/bin", "usr/lib", "usr/lib/modules"
     ];
     for dir in dirs {
         fs::create_dir_all(temp_ramdisk.join(dir)).ok();
     }
     let _ = run_command("ln", &["-sf", "usr/bin", temp_ramdisk.join("bin").to_str().unwrap()]);
     let _ = run_command("ln", &["-sf", "usr/bin", temp_ramdisk.join("sbin").to_str().unwrap()]);
+    let _ = run_command("ln", &["-sf", "usr/bin", temp_ramdisk.join("usr/sbin").to_str().unwrap()]);
     let _ = run_command("ln", &["-sf", "usr/lib", temp_ramdisk.join("lib").to_str().unwrap()]);
     let _ = run_command("ln", &["-sf", "usr/lib", temp_ramdisk.join("lib64").to_str().unwrap()]);
     let dst_mod_dir = temp_ramdisk.join("usr/lib/modules");
@@ -190,7 +191,7 @@ pub fn generate_liska_initramfs(rootfs: &Path, output_img: &Path) -> Result<(), 
             "sh", "bash", "cttyhack", "mount", "umount", "mdev", 
             "insmod", "modprobe", "blkid", "losetup", "mknod",
             "ls", "cat", "echo", "clear", "mkdir", "rm", "cp", 
-            "mv"
+            "mv", "reboot", "poweroff", "which"
         ];
         for link in busybox_links {
             let link_path = temp_ramdisk.join("usr/bin").join(link);
@@ -198,6 +199,10 @@ pub fn generate_liska_initramfs(rootfs: &Path, output_img: &Path) -> Result<(), 
             let _ = run_command("ln", &["-sf", "busybox", link_path.to_str().unwrap()]);
             let _ = run_command("chmod", &["+x", link_path.to_str().unwrap()]);
         }
+        let shutdown_path = temp_ramdisk.join("usr/bin/shutdown");
+        let _ = fs::remove_file(&shutdown_path);
+        let _ = run_command("ln", &["-sf", "poweroff", shutdown_path.to_str().unwrap()]);
+        let _ = run_command("chmod", &["+x", shutdown_path.to_str().unwrap()]);
     }
     let liska_libs = &[
         "ld-linux-x86-64.so.2",
