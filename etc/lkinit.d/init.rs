@@ -327,18 +327,47 @@ fn cmdline_value(cmdline: &str, key: &str) -> Option<String> {
 }
 
 fn resolve_device(target: &str) -> String {
-    let alias = if let Some(value) = target.strip_prefix("UUID=") {
-        Some(format!("/dev/disk/by-uuid/{value}"))
-    } else if let Some(value) = target.strip_prefix("PARTUUID=") {
-        Some(format!("/dev/disk/by-partuuid/{value}"))
+    if target.starts_with("/dev/") && Path::new(target).exists() {
+        return target.to_owned();
+    }
+    if let Ok(output) = Command::new("blkid")
+        .args(["-t", target, "-o", "device"])
+        .env("PATH", PATH_ENV)
+        .output()
+    {
+        if output.status.success() {
+            let dev = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !dev.is_empty() && Path::new(&dev).exists() {
+                return dev;
+            }
+        }
+    }
+    let (key, val) = if let Some(v) = target.strip_prefix("UUID=") {
+        ("UUID", v)
+    } else if let Some(v) = target.strip_prefix("LABEL=") {
+        ("LABEL", v)
+    } else if let Some(v) = target.strip_prefix("PARTUUID=") {
+        ("PARTUUID", v)
     } else {
-        target
-            .strip_prefix("LABEL=")
-            .map(|value| format!("/dev/disk/by-label/{value}"))
+        ("", "")
     };
-    if let Some(alias) = alias {
-        if Path::new(&alias).exists() {
-            return alias;
+    if !key.is_empty() && !val.is_empty() {
+        if let Ok(devices) = candidate_block_devices() {
+            for dev in devices {
+                let dev_str = dev.display().to_string();
+                if let Ok(output) = Command::new("blkid")
+                    .args(["-s", key, "-o", "value", &dev_str])
+                    .env("PATH", PATH_ENV)
+                    .output()
+                {
+                    if output.status.success() {
+                        let attr_val = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                        if attr_val == val {
+                            return dev_str;
+                        }
+                    }
+                }
+            }
         }
     }
     target.to_owned()
