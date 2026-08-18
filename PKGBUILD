@@ -13,10 +13,10 @@ license=('GPL-3.0-or-later')
 depends=(
     'ca-certificates' 'sqlite' 'zstd' 'xz' 'busybox' 'cpio' 'kmod' 'bash'
     'curl' 'tar' 'coreutils' 'fakeroot' 'gzip' 'bzip2' 'unzip'
-    'p7zip' 'rustup'
+    'p7zip' 'rustup' 'gcc' 'musl'
 )
 optdepends=(
-    'git' 'make' 'gcc' 'clang' 'python' 'perl' 'ruby' 'nodejs'
+    'git' 'make' 'clang' 'python' 'perl' 'ruby' 'nodejs'
     'npm' 'yarn' 'go'
 )
 makedepends=('rustup' 'pkgconf' 'sqlite')

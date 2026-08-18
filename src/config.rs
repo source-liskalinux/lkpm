@@ -44,7 +44,7 @@ impl Config {
             blocked_packages: Vec::new(),
             no_update_packages: Vec::new(),
             parallel_operation: 4,
-            db_path: PathBuf::from("/var/lib/lkpm.db"),
+            db_path: PathBuf::from("/var/lib/lkpm"),
             cache_path: PathBuf::from("/var/cache/lkpm"),
             install_root: PathBuf::from("/"),
         }
@@ -86,6 +86,19 @@ impl Config {
         if let Ok(val) = globals.get::<Vec<String>>("no_update") {
             self.no_update_packages = val;
         }
+    }
+    pub fn apply_system_config_for_root(&mut self, root: &std::path::Path) {
+        let root_config = root.join("etc/lkpm.d/config.lua");
+        let text = std::fs::read_to_string(&root_config)
+            .or_else(|_| std::fs::read_to_string(SYSTEM_CONFIG))
+            .unwrap_or_else(|_| DEFAULT_CONFIG.to_string());
+        let saved_db = self.db_path.clone();
+        let saved_cache = self.cache_path.clone();
+        let saved_root = self.install_root.clone();
+        self.apply_config_lua(&text);
+        self.db_path = saved_db;
+        self.cache_path = saved_cache;
+        self.install_root = saved_root;
     }
     pub fn reload_mirrorlist_for_root(&mut self) {
         let root_mirrorlist = self.install_root.join("etc/lkpm.d/mirrorlist");

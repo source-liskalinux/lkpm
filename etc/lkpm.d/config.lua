@@ -34,7 +34,7 @@
 
 arch = "x86_64"
 install_root = "/"
-db_path = "/var/lib/lkpm.db"
+db_path = "/var/lib/lkpm"
 cache_path = "/var/cache/lkpm"
 parallel_operation = 4
 --blocked_packages = {

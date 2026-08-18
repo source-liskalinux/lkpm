@@ -394,6 +394,7 @@ fn apply_root_override(cfg: &mut Config, root: Option<PathBuf>) -> Result<(), Lk
         cfg.install_root = root.clone();
         cfg.db_path = root.join("var/lib/lkpm");
         cfg.cache_path = root.join("var/cache/lkpm");
+        cfg.apply_system_config_for_root(&root);
         cfg.reload_mirrorlist_for_root();
     }
     Ok(())

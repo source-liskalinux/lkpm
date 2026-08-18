@@ -350,7 +350,7 @@ fn refresh_json_repo(cfg: &Config, repo_url: &str) -> Result<Option<PathBuf>, Lk
                 r.text().map_err(|e| LkpmError::Network(e.to_string()))?
             };
             database::Database::store_repo_index(cfg, &index_url, &text)?;
-            Ok(Some(cfg.db_path.join("db.sqlite")))
+            Ok(Some(cfg.db_path.join("lkpm-database.db")))
         }
         Ok(_) => Err(LkpmError::Network(format!("Failed to fetch {}", index_url))),
         Err(err) => Err(LkpmError::Network(err.to_string())),
