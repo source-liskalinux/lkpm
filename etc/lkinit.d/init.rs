@@ -333,62 +333,105 @@ fn resolve_device(target: &str) -> String {
         return target.to_owned();
     }
     run_optional("/bin/mdev", &["-s"]);
-    if let Some(uuid) = target.strip_prefix("UUID=") {
-        if let Ok(output) = Command::new("blkid")
-            .args(["-U", uuid])
-            .env("PATH", PATH_ENV)
-            .output()
-        {
-            if output.status.success() {
-                let dev = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                if !dev.is_empty() && Path::new(&dev).exists() {
-                    return dev;
-                }
-            }
-        }
-    } else if let Some(label) = target.strip_prefix("LABEL=") {
-        if let Ok(output) = Command::new("blkid")
-            .args(["-L", label])
-            .env("PATH", PATH_ENV)
-            .output()
-        {
-            if output.status.success() {
-                let dev = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                if !dev.is_empty() && Path::new(&dev).exists() {
-                    return dev;
-                }
-            }
-        }
-    }
     let (key, val) = if let Some(v) = target.strip_prefix("UUID=") {
         ("UUID", v)
     } else if let Some(v) = target.strip_prefix("LABEL=") {
         ("LABEL", v)
     } else if let Some(v) = target.strip_prefix("PARTUUID=") {
         ("PARTUUID", v)
+    } else if let Some(v) = target.strip_prefix("PARTLABEL=") {
+        ("PARTLABEL", v)
     } else {
         ("", "")
     };
     if !key.is_empty() && !val.is_empty() {
-        if let Ok(devices) = candidate_block_devices() {
-            for dev in devices {
-                let dev_str = dev.display().to_string();
-                if let Ok(output) = Command::new("blkid")
-                    .args(["-s", key, "-o", "value", &dev_str])
-                    .env("PATH", PATH_ENV)
-                    .output()
-                {
-                    if output.status.success() {
-                        let attr_val = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                        if attr_val == val {
-                            return dev_str;
-                        }
+        if let Some(dev) = find_device_by_tag(key, val) {
+            return dev;
+        }
+    }
+    target.to_owned()
+}
+
+fn find_device_by_tag(key: &str, val: &str) -> Option<String> {
+    if key == "UUID" || key == "LABEL" {
+        let flag = if key == "UUID" { "-U" } else { "-L" };
+        if let Ok(output) = Command::new("blkid")
+            .args([flag, val])
+            .env("PATH", PATH_ENV)
+            .output()
+        {
+            if output.status.success() {
+                let dev = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !dev.is_empty() && Path::new(&dev).exists() {
+                    return Some(dev);
+                }
+            }
+        }
+    }
+    if let Ok(output) = Command::new("blkid").env("PATH", PATH_ENV).output() {
+        let text = String::from_utf8_lossy(&output.stdout);
+        for line in text.lines() {
+            let Some((device, rest)) = line.split_once(':') else {
+                continue;
+            };
+            let device = device.trim();
+            if device.is_empty() {
+                continue;
+            }
+            for (attr_key, attr_val) in parse_blkid_attrs(rest.trim()) {
+                if attr_key.eq_ignore_ascii_case(key) && attr_val == val && Path::new(device).exists() {
+                    return Some(device.to_string());
+                }
+            }
+        }
+    }
+    if let Ok(devices) = candidate_block_devices() {
+        for dev in devices {
+            let dev_str = dev.display().to_string();
+            if let Ok(output) = Command::new("blkid")
+                .args(["-s", key, "-o", "value", &dev_str])
+                .env("PATH", PATH_ENV)
+                .output()
+            {
+                if output.status.success() {
+                    let attr_val = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    if attr_val == val {
+                        return Some(dev_str);
                     }
                 }
             }
         }
     }
-    target.to_owned()
+    None
+}
+
+fn parse_blkid_attrs(rest: &str) -> Vec<(String, String)> {
+    let mut attrs = Vec::new();
+    let mut remainder = rest;
+    while let Some(eq_idx) = remainder.find('=') {
+        let key = remainder[..eq_idx].trim();
+        if key.is_empty() || key.contains(char::is_whitespace) {
+            break;
+        }
+        let after_eq = &remainder[eq_idx + 1..];
+        let (value, tail) = if let Some(stripped) = after_eq.strip_prefix('"') {
+            match stripped.find('"') {
+                Some(end) => (&stripped[..end], &stripped[end + 1..]),
+                None => (stripped, ""),
+            }
+        } else {
+            match after_eq.find(' ') {
+                Some(end) => (&after_eq[..end], &after_eq[end..]),
+                None => (after_eq, ""),
+            }
+        };
+        attrs.push((key.to_string(), value.to_string()));
+        remainder = tail.trim_start();
+        if remainder.is_empty() {
+            break;
+        }
+    }
+    attrs
 }
 
 fn move_virtual_mounts(sysroot: &str) -> InitResult<()> {
@@ -401,6 +444,9 @@ fn move_virtual_mounts(sysroot: &str) -> InitResult<()> {
     Ok(())
 }
 
+// Here you can add your init or system manager that you'll use.
+// You can add runit, systemd, or other system manager that can
+// run on Linux properly.
 fn find_init_program(sysroot: &str) -> Option<String> {
     [
         "/usr/sbin/lksystem",
@@ -497,13 +543,30 @@ fn new_root_is_mounted() -> bool {
 }
 
 fn do_reboot() -> ! {
-    const LINUX_REBOOT_MAGIC1: c_int = 0xfee1deadu32 as c_int;
-    const LINUX_REBOOT_MAGIC2: c_int = 0x28121969u32 as c_int;
-    const LINUX_REBOOT_CMD_RESTART: c_int = 0x01234567u32 as c_int;
-    warning("Syncing disks and rebooting....");
+    warning("Rebooting....");
     unsafe { sync() };
     thread::sleep(Duration::from_secs(1));
-    unsafe { reboot(LINUX_REBOOT_MAGIC1, LINUX_REBOOT_MAGIC2, LINUX_REBOOT_CMD_RESTART, std::ptr::null()) };
+    const REBOOT_CANDIDATES: [(&str, Option<&str>); 4] = [
+        ("reboot", None),
+        ("/bin/reboot", None),
+        ("/usr/bin/reboot", None),
+        ("/bin/busybox", Some("reboot")),
+    ];
+    for (program, arg) in REBOOT_CANDIDATES {
+        let mut command = Command::new(program);
+        if let Some(arg) = arg {
+            command.arg(arg);
+        }
+        command.env("PATH", PATH_ENV);
+        match command.status() {
+            Ok(status) if status.success() => {
+                warning(&format!("Handed off to {program}. Waiting for kernel to restart...."));
+                thread::sleep(Duration::from_secs(3));
+            }
+            Ok(_) | Err(_) => continue,
+        }
+    }
+    error("CRITICAL: Reboot command unavailable or ineffective! Halting the system to prevent kernel panic!");
     loop {
         thread::sleep(Duration::from_secs(3600));
     }
@@ -511,7 +574,7 @@ fn do_reboot() -> ! {
 
 fn try_resume_boot() {
     if new_root_is_mounted() {
-        warning("Detected mounted /new_root! Attempting to resume boot....");
+        warning("Detected mounted '/new_root'! Attempting to resume boot process....");
         for dir in ["dev", "proc", "sys", "run"] {
             let old = format!("/{dir}");
             let new = format!("{NEW_ROOT}/{dir}");
@@ -520,19 +583,21 @@ fn try_resume_boot() {
         }
         match find_init_program(NEW_ROOT) {
             Some(init) => {
-                success(&format!("Resuming boot with {init}...."));
+                success(&format!("Starting {init} as PID 1...."));
                 if let Err(e) = switch_root(NEW_ROOT, &init) {
                     error(&format!("CRITICAL: switch_root failed: {e}!"));
+                    do_reboot();
                 }
             }
             None => {
-                error("No init found in /new_root even after manual fix!");
+                error("CRITICAL: No init found in '/new_root' even after manual fix!");
+                do_reboot();
             }
         }
     } else {
-        warning("/new_root is not mounted!");
+        error("CRITICAL: '/new_root' is not mounted!");
+        do_reboot();
     }
-    do_reboot();
 }
 
 fn emergency_shell() -> ! {
