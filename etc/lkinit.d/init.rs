@@ -32,7 +32,6 @@ unsafe extern "C" {
     fn umount(target: *const c_char) -> c_int;
     fn chroot(path: *const c_char) -> c_int;
     fn execv(path: *const c_char, argv: *const *const c_char) -> c_int;
-    fn reboot(magic: c_int, magic2: c_int, cmd: c_int, arg: *const c_void) -> c_int;
     fn sync();
 }
 
