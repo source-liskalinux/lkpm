@@ -29,8 +29,9 @@
 #          Linux packages system!
 # --------------------------------------------------------------------------
 [core]
-https://github.com/repo-liskalinux/main/raw/refs/heads/main/x86_64/core/db.json.tar.zst
-https://github.com/repo-liskalinux/main/raw/refs/heads/main/x86_64/extra/db.json.tar.zst
+https://github.com/repo-liskalinux/main/raw/refs/heads/main/x86_64/system/db.json.tar.zst
+https://github.com/repo-liskalinux/main/raw/refs/heads/main/x86_64/galaxy/db.json.tar.zst
+https://github.com/repo-liskalinux/main/raw/refs/heads/main/x86_64/world/db.json.tar.zst
 
 # :: [ EXTRA ] ::
 # Third-party repository URLs.
