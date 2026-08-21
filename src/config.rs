@@ -40,7 +40,7 @@ impl Config {
             arch: Vec::<String>::new().into_iter().collect(),
             blocked_packages: Vec::new(),
             no_update_packages: Vec::new(),
-            parallel_operation: 4,
+            parallel_operation: 5,
             db_path: PathBuf::from("/var/db/lkpm"),
             cache_path: PathBuf::from("/var/cache/lkpm"),
             install_root: PathBuf::from("/"),

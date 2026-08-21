@@ -4,12 +4,11 @@
 --
 -- This file configures behavior rules for lkpm.
 --
--- > Param: [ install_root | db_path | cache_path | parallel_operation
+-- > Param: [ install_root | cache_path | parallel_operation
 --          | blocked_packages | no_update ]
 --
 -- > arch                : The architecture of the system (e.g x86_64).
 -- > install_root        : The root directory where packages will be installed.
--- > db_path             : The path to the lkpm default database file.
 -- > cache_path          : The path to the lkpm default cache directory.
 -- > parallel_operation  : The number of parallel operations to run at once.
 -- > blocked_packages    : A list of package names to block from installation.
@@ -34,9 +33,8 @@
 
 arch = "x86_64"
 install_root = "/"
-db_path = "/var/lib/lkpm"
 cache_path = "/var/cache/lkpm"
-parallel_operation = 4
+parallel_operation = 5
 --blocked_packages = {
 --    "foo-pkg",
 --    "bar-pkg",
