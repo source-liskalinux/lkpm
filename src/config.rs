@@ -13,9 +13,9 @@ pub struct Config {
     pub core_repos: Vec<String>,
     pub extra_mirrors: Vec<String>,
     pub arch: String,
-        pub blocked_packages: Vec<String>,
-        pub parallel_operation: usize,
-        pub no_update_packages: Vec<String>,
+    pub blocked_packages: Vec<String>,
+    pub parallel_operation: usize,
+    pub no_update_packages: Vec<String>,
     pub db_path: PathBuf,
     pub cache_path: PathBuf,
     pub install_root: PathBuf,
@@ -24,9 +24,6 @@ pub struct Config {
 impl Config {
     pub fn load() -> Self {
         let mut cfg = Self::defaults();
-        // During unit tests prefer the bundled default mirrorlist so tests are
-        // deterministic and not dependent on the system `/etc/lkpm.d/mirrorlist`
-        // and `/etc/lkpm.d/config.lua` files.
         if cfg!(test) {
             cfg.apply_mirrorlist(DEFAULT_MIRRORLIST);
             cfg.apply_config_lua(DEFAULT_CONFIG);
@@ -44,7 +41,7 @@ impl Config {
             blocked_packages: Vec::new(),
             no_update_packages: Vec::new(),
             parallel_operation: 4,
-            db_path: PathBuf::from("/var/lib/lkpm"),
+            db_path: PathBuf::from("/var/db/lkpm"),
             cache_path: PathBuf::from("/var/cache/lkpm"),
             install_root: PathBuf::from("/"),
         }
@@ -70,10 +67,7 @@ impl Config {
         }
         if let Ok(val) = globals.get::<String>("install_root") {
             self.install_root = PathBuf::from(val);
-        }
-        if let Ok(val) = globals.get::<String>("db_path") {
-            self.db_path = PathBuf::from(val);
-        }
+        }   
         if let Ok(val) = globals.get::<String>("cache_path") {
             self.cache_path = PathBuf::from(val);
         }
@@ -91,12 +85,10 @@ impl Config {
         let root_config = root.join("etc/lkpm.d/config.lua");
         let text = std::fs::read_to_string(&root_config)
             .or_else(|_| std::fs::read_to_string(SYSTEM_CONFIG))
-            .unwrap_or_else(|_| DEFAULT_CONFIG.to_string());
-        let saved_db = self.db_path.clone();
+            .unwrap_or_else(|_| DEFAULT_CONFIG.to_string());   
         let saved_cache = self.cache_path.clone();
         let saved_root = self.install_root.clone();
         self.apply_config_lua(&text);
-        self.db_path = saved_db;
         self.cache_path = saved_cache;
         self.install_root = saved_root;
     }
@@ -161,5 +153,3 @@ fn clean_line(line: &str) -> &str {
     let without_comment = &line[..comment_index];
     without_comment.trim()
 }
-
-

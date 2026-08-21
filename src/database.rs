@@ -4,6 +4,8 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+#[cfg(unix)]
+use std::os::unix::fs::DirBuilderExt;
 
 fn default_source_kind() -> String {
     "unknown".into()
@@ -35,11 +37,19 @@ pub struct Database {
 }
 
 impl Database {
-    pub fn load(cfg: &Config) -> Result<Self, LkpmError> {
-        let db_file = cfg.db_path.join("lkpm-database.db");
-        if !db_file.exists() {
-            fs::create_dir_all(&cfg.db_path).map_err(LkpmError::Io)?;
+    fn ensure_db_dir(db_path: &PathBuf) -> Result<(), LkpmError> {
+        if !db_path.exists() {
+            let mut builder = fs::DirBuilder::new();
+            builder.recursive(true);       
+            #[cfg(unix)]
+            builder.mode(0o711);
+            builder.create(db_path).map_err(LkpmError::Io)?;
         }
+        Ok(())
+    }
+    pub fn load(cfg: &Config) -> Result<Self, LkpmError> {
+        Self::ensure_db_dir(&cfg.db_path)?;
+        let db_file = cfg.db_path.join("lkpm-database.db");
         let conn = Connection::open(&db_file)
             .map_err(|e| LkpmError::Other(format!("lkpm-database.db open error: {}", e)))?;
         conn.execute_batch(
@@ -61,10 +71,8 @@ impl Database {
         Ok(Database { db_file })
     }
     fn open_mirrors_cache(cfg: &Config) -> Result<Connection, LkpmError> {
+        Self::ensure_db_dir(&cfg.db_path)?;
         let cache_file = cfg.db_path.join("mirrors-cache.db");
-        if !cfg.db_path.exists() {
-            fs::create_dir_all(&cfg.db_path).map_err(LkpmError::Io)?;
-        }
         let conn = Connection::open(&cache_file)
             .map_err(|e| LkpmError::Other(format!("mirrors-cache.db open error: {}", e)))?;
         conn.execute_batch(
@@ -191,7 +199,6 @@ impl Database {
         }
     }
     pub fn find(&self, name: &str) -> Result<Option<InstalledPackage>, LkpmError> {
-        // For now, `find` behaves same as `get`.
         self.get(name)
     }
     pub fn list(&self) -> Result<Vec<InstalledPackage>, LkpmError> {
