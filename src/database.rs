@@ -58,6 +58,15 @@ impl Database {
             );",
         )
         .map_err(|e| LkpmError::Other(format!("lkpm-database.db init error: {}", e)))?;
+        Ok(Database { db_file })
+    }
+    fn open_mirrors_cache(cfg: &Config) -> Result<Connection, LkpmError> {
+        let cache_file = cfg.db_path.join("mirrors-cache.db");
+        if !cfg.db_path.exists() {
+            fs::create_dir_all(&cfg.db_path).map_err(LkpmError::Io)?;
+        }
+        let conn = Connection::open(&cache_file)
+            .map_err(|e| LkpmError::Other(format!("mirrors-cache.db open error: {}", e)))?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS repo_cache (
                 id TEXT PRIMARY KEY,
@@ -66,8 +75,36 @@ impl Database {
                 fetched_at INTEGER
             );",
         )
-        .map_err(|e| LkpmError::Other(format!("lkpm-database.db init error: {}", e)))?;
-        Ok(Database { db_file })
+        .map_err(|e| LkpmError::Other(format!("mirrors-cache.db init error: {}", e)))?;
+        Ok(conn)
+    }
+    pub fn store_repo_index(cfg: &Config, index_url: &str, index_json: &str) -> Result<(), LkpmError> {
+        let conn = Self::open_mirrors_cache(cfg)?;
+        conn.execute(
+            "INSERT OR REPLACE INTO repo_cache (id, repo_url, index_json, fetched_at) VALUES (?1, ?2, ?3, strftime('%s','now'))",
+            params![index_url, index_url, index_json],
+        )
+        .map_err(|e| LkpmError::Other(format!("mirrors-cache.db insert error: {}", e)))?;
+        Ok(())
+    }
+    pub fn read_repo_index(cfg: &Config, index_url: &str) -> Result<Option<String>, LkpmError> {
+        let cache_file = cfg.db_path.join("mirrors-cache.db");
+        if !cache_file.exists() {
+            return Ok(None);
+        }
+        let conn = Self::open_mirrors_cache(cfg)?;   
+        let mut stmt = conn
+            .prepare("SELECT index_json FROM repo_cache WHERE id = ?1")
+            .map_err(|e| LkpmError::Other(format!("mirrors-cache.db query prepare error: {}", e)))?; 
+        let mut rows = stmt
+            .query_map(params![index_url], |row| row.get(0))
+            .map_err(|e| LkpmError::Other(format!("mirrors-cache.db query error: {}", e)))?;
+        if let Some(r) = rows.next() {
+            let s: String = r.map_err(|e| LkpmError::Other(format!("mirrors-cache.db row error: {}", e)))?;
+            Ok(Some(s))
+        } else {
+            Ok(None)
+        }
     }
     fn conn(&self) -> Result<Connection, LkpmError> {
         Connection::open(&self.db_file).map_err(|e| LkpmError::Other(format!("lkpm-database.db open error: {}", e)))
@@ -194,34 +231,5 @@ impl Database {
             results.push(r.map_err(|e| LkpmError::Other(format!("lkpm-database.db row error: {}", e)))?);
         }
         Ok(results)
-    }
-    pub fn store_repo_index(cfg: &Config, index_url: &str, index_json: &str) -> Result<(), LkpmError> {
-        let db_file = cfg.db_path.join("lkpm-database.db");
-        let conn = Connection::open(&db_file).map_err(|e| LkpmError::Other(format!("lkpm-database.db open error: {}", e)))?;
-        conn.execute(
-            "INSERT OR REPLACE INTO repo_cache (id, repo_url, index_json, fetched_at) VALUES (?1, ?2, ?3, strftime('%s','now'))",
-            params![index_url, index_url, index_json],
-        )
-        .map_err(|e| LkpmError::Other(format!("lkpm-database.db insert error: {}", e)))?;
-        Ok(())
-    }
-    pub fn read_repo_index(cfg: &Config, index_url: &str) -> Result<Option<String>, LkpmError> {
-        let db_file = cfg.db_path.join("lkpm-database.db");
-        if !db_file.exists() {
-            return Ok(None);
-        }
-        let conn = Connection::open(&db_file).map_err(|e| LkpmError::Other(format!("lkpm-database.db open error: {}", e)))?;
-        let mut stmt = conn
-            .prepare("SELECT index_json FROM repo_cache WHERE id = ?1")
-            .map_err(|e| LkpmError::Other(format!("lkpm-database.db query prepare error: {}", e)))?;
-        let mut rows = stmt
-            .query_map(params![index_url], |row| row.get(0))
-            .map_err(|e| LkpmError::Other(format!("lkpm-database.db query error: {}", e)))?;
-        if let Some(r) = rows.next() {
-            let s: String = r.map_err(|e| LkpmError::Other(format!("lkpm-database.db row error: {}", e)))?;
-            Ok(Some(s))
-        } else {
-            Ok(None)
-        }
     }
 }
