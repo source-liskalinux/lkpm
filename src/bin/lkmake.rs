@@ -370,8 +370,9 @@ fn run_lkpm(args: &[&str]) -> std::io::Result<std::process::ExitStatus> {
 
 fn fakeroot_state_path() -> String {
     let cache_dir = env::var("XDG_CACHE_HOME")
+        .ok()
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|_| {
+        .unwrap_or_else(|| {
             let home = env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
             format!("{}/.cache", home)
         });
@@ -425,11 +426,11 @@ fn main() {
     let _ = run_pkg_phase("prepare", cwd, srcdir, pkgdir, projectdir, "");
     let _ = run_pkg_phase("build", cwd, srcdir, pkgdir, projectdir, "");
     let _ = run_pkg_phase("check", cwd, srcdir, pkgdir, projectdir, "");
-    let _ = run_pkg_phase("package", cwd, srcdir, pkgdir, projectdir, fakeroot_state);
+    let _ = run_pkg_phase("package", cwd, srcdir, pkgdir, projectdir, &fakeroot_state);
     let pkgname = read_pkgname().unwrap_or_else(|| "package-unknown".to_string());
     write_pkginfo(pkgdir);
     write_buildinfo(pkgdir);
-    let success = package_archive(pkgdir, &pkgname, projectdir, fakeroot_state);
+    let success = package_archive(pkgdir, &pkgname, projectdir, &fakeroot_state);
     let _ = fs::remove_file(&fakeroot_state);
     if success { log_success(&format!("Package successfully created: {}{}.lsk.tar.zst", projectdir, pkgname)); } else { log_error("Failed to create package tarball!"); }
     if install_after && success {
