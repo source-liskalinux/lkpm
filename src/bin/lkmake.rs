@@ -417,6 +417,7 @@ fn main() {
     write_pkginfo(pkgdir);
     write_buildinfo(pkgdir);
     let success = package_archive(pkgdir, &pkgname, projectdir, fakeroot_state);
+    let _ = fs::remove_file(&fakeroot_state);
     if success { log_success(&format!("Package successfully created: {}{}.lsk.tar.zst", projectdir, pkgname)); } else { log_error("Failed to create package tarball!"); }
     if install_after && success {
         let archive = format!("{}{}.lsk.tar.zst", projectdir, pkgname);
@@ -425,6 +426,5 @@ fn main() {
     if clean_after { 
         let _ = fs::remove_dir_all(srcdir); 
         let _ = fs::remove_dir_all(pkgdir);
-        let _ = fs::remove_file(&fakeroot_state);
     }
 }
