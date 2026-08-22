@@ -11,6 +11,7 @@ use indicatif::ProgressBar;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
+use std::env;
 use std::path::{Component, Path, PathBuf};
 use std::time::Instant;
 use colored::Colorize;
@@ -427,6 +428,27 @@ fn apply_root_override(cfg: &mut Config, root: Option<PathBuf>) -> Result<(), Lk
     Ok(())
 }
 
+fn original_user_home() -> Option<PathBuf> {
+    env::var_os("HOME")
+        .map(PathBuf::from)
+        .or_else(|| Some(PathBuf::from("/root")))
+        .or_else(|| Some(PathBuf::from("/")))
+}
+
+fn resolve_local_package_path(raw: &str) -> PathBuf {
+    let path = PathBuf::from(raw);
+    if path.exists() {
+        return path;
+    }
+    if let Some(home) = original_user_home() {
+        let candidate = home.join(raw);
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+    path
+}
+
 fn install_local_packages(
     cfg: &Config,
     db: &mut Database,
@@ -444,7 +466,7 @@ fn install_local_packages(
     let duration = Instant::now();
     let mut targets = Vec::new();
     for raw in packages.iter() {
-        let path = PathBuf::from(raw);
+        let path = resolve_local_package_path(raw);
         if !path.exists() || !path.is_file() {
             return Err(LkpmError::Other(format!(
                 "Local package file {} was not found!",
@@ -1086,6 +1108,7 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
             })
         }
         Command::Package { package, .. } => {
+            require_root_for_install_root(&cfg)?;
             ui::start_operation(&format!("Fetching {} information....", package));
             ensure_package_is_not_blocked(&cfg, &package)?;
             let record = if let Some(installed) = find_installed_package(&db, &package)? {

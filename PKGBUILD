@@ -48,7 +48,7 @@ package() {
     if [ -f "./etc/lkpm.d/mirrorlist" ]; then
         install -Dm 644 "./etc/lkpm.d/mirrorlist" "${pkgdir}/etc/lkpm.d/mirrorlist"
     fi
-    install -dm 711 "${pkgdir}/var/db/lkpm"
+    install -dm 700 "${pkgdir}/var/db/lkpm"
     echo "--> [PACKAGE] Installing lkmake...."
     install -Dm 755 "./target/release/lkmake" "${pkgdir}/usr/bin/lkmake"
     echo "--> [PACKAGE] Installing lkinit...."

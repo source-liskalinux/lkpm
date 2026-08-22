@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 #[cfg(unix)]
-use std::os::unix::fs::DirBuilderExt;
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 
 fn default_source_kind() -> String {
     "unknown".into()
@@ -45,11 +45,24 @@ impl Database {
     fn ensure_db_dir(db_path: &PathBuf) -> Result<(), LkpmError> {
         if !db_path.exists() {
             let mut builder = fs::DirBuilder::new();
-            builder.recursive(true);       
+            builder.recursive(true);
             #[cfg(unix)]
-            builder.mode(0o711);
+            builder.mode(0o700);
             builder.create(db_path).map_err(LkpmError::Io)?;
         }
+        #[cfg(unix)]
+        {
+            fs::set_permissions(db_path, fs::Permissions::from_mode(0o700))
+            .map_err(LkpmError::Io)?;
+        }
+        Ok(())
+    }
+    #[cfg(unix)]
+    fn ensure_db_file_mode(db_file: &PathBuf) -> Result<(), LkpmError> {
+        fs::set_permissions(db_file, fs::Permissions::from_mode(0o700)).map_err(LkpmError::Io)
+    }
+    #[cfg(not(unix))]
+    fn ensure_db_file_mode(_db_file: &PathBuf) -> Result<(), LkpmError> {
         Ok(())
     }
     pub fn load(cfg: &Config) -> Result<Self, LkpmError> {
@@ -75,6 +88,7 @@ impl Database {
             );",
         )
         .map_err(|e| LkpmError::Other(format!("lkpm-database.db init error: {}", e)))?;
+        Self::ensure_db_file_mode(&db_file)?;
         Ok(Database { db_file })
     }
     fn open_mirrors_cache(cfg: &Config) -> Result<Connection, LkpmError> {
@@ -91,6 +105,7 @@ impl Database {
             );",
         )
         .map_err(|e| LkpmError::Other(format!("mirrors-cache.db init error: {}", e)))?;
+        Self::ensure_db_file_mode(&cache_file)?;
         Ok(conn)
     }
     pub fn store_repo_index(cfg: &Config, index_url: &str, index_json: &str) -> Result<(), LkpmError> {

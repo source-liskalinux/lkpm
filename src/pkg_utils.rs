@@ -88,6 +88,23 @@ fn sha256_bytes(data: &[u8]) -> String {
     hex::encode(hasher.finalize())
 }
 
+fn write_atomic(dest_path: &Path, buf: &[u8], mode: Option<u32>) -> Result<()> {
+    let file_name = dest_path
+        .file_name()
+        .context("Invalid destination path (no file name)")?;
+    let tmp_name = format!(".{}.lkpmtmp", file_name.to_string_lossy());
+    let tmp_path = dest_path.with_file_name(tmp_name);
+    fs::write(&tmp_path, buf)
+        .with_context(|| format!("Failed to write temp file {}", tmp_path.display()))?;
+    if let Some(mode) = mode {
+        fs::set_permissions(&tmp_path, fs::Permissions::from_mode(mode))
+            .with_context(|| format!("Failed to set permissions on {}", tmp_path.display()))?;
+    }
+    fs::rename(&tmp_path, dest_path)
+        .with_context(|| format!("Failed to rename into place: {}", dest_path.display()))?;
+    Ok(())
+}
+
 pub fn install_package_with_backups(
     path: &Path,
     install_root: &Path,
@@ -154,18 +171,12 @@ pub fn install_package_with_backups(
                         preserved_as_new.push(new_path);
                         installed_files.push(dest_path.clone());
                     } else {
-                        fs::write(&dest_path, &buf)?;
-                        if let Some(mode) = mode {
-                            fs::set_permissions(&dest_path, fs::Permissions::from_mode(mode))?;
-                        }
+                        write_atomic(&dest_path, &buf, mode)?;
                         installed_files.push(dest_path.clone());
                     }
                     backups_hashes.insert(entry_key.clone(), new_hash);
                 } else {
-                    fs::write(&dest_path, &buf)?;
-                    if let Some(mode) = mode {
-                        fs::set_permissions(&dest_path, fs::Permissions::from_mode(mode))?;
-                    }
+                    write_atomic(&dest_path, &buf, mode)?;
                     installed_files.push(dest_path);
                 }
             }
