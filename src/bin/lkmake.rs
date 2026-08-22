@@ -368,6 +368,18 @@ fn run_lkpm(args: &[&str]) -> std::io::Result<std::process::ExitStatus> {
     }
 }
 
+fn fakeroot_state_path() -> String {
+    let cache_dir = env::var("XDG_CACHE_HOME")
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|_| {
+            let home = env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+            format!("{}/.cache", home)
+        });
+    let dir = format!("{}/lkmake", cache_dir);
+    fs::create_dir_all(&dir).ok();
+    format!("{}/fakeroot.state", dir)
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() > 1 && (args[1] == "-h" || args[1] == "--help") {
@@ -396,7 +408,8 @@ fn main() {
     let srcdir = "src";
     let pkgdir = "pkg";
     let projectdir = "./";
-    let fakeroot_state = ".fakeroot.state";
+    let fakeroot_state = fakeroot_state_path();
+    let _ = fs::remove_file(&fakeroot_state);
     let _ = download_sources(srcdir);
     let ok = check_integrity(srcdir);
     if !ok { 
