@@ -20,33 +20,44 @@ optdepends=(
     'npm' 'yarn' 'go'
 )
 makedepends=('rustup' 'pkgconf' 'sqlite')
+backup=(
+    'etc/lkpm.d/config.lua'
+    'etc/lkpm.d/mirrorlist'
+    'etc/lkinit.d/Cargo.toml'
+    'etc/lkinit.d/init.rs'
+)
 
 build() {
     echo "--> [BUILD] Compiling lkpm, lkmake, lkinit, and lkchroot...."
     cargo build --release
 }
 
+check() {
+    echo "-- [CHECK] Checking compiled binary...."
+    cargo check --release --all-targets
+}
+
 package() {
     install -d "${pkgdir}/usr/bin"
     install -d "${pkgdir}/etc"
     echo "--> [PACKAGE] Installing lkpm...."
-    install -Dm755 "./target/release/lkpm" "${pkgdir}/usr/bin/lkpm"
+    install -Dm 755 "./target/release/lkpm" "${pkgdir}/usr/bin/lkpm"
     if [ -f "./etc/lkpm.d/config.lua" ]; then
-        install -Dm644 "./etc/lkpm.d/config.lua" "${pkgdir}/etc/lkpm.d/config.lua"
+        install -Dm 644 "./etc/lkpm.d/config.lua" "${pkgdir}/etc/lkpm.d/config.lua"
     fi
     if [ -f "./etc/lkpm.d/mirrorlist" ]; then
-        install -Dm644 "./etc/lkpm.d/mirrorlist" "${pkgdir}/etc/lkpm.d/mirrorlist"
+        install -Dm 644 "./etc/lkpm.d/mirrorlist" "${pkgdir}/etc/lkpm.d/mirrorlist"
     fi
     echo "--> [PACKAGE] Installing lkmake...."
-    install -Dm755 "./target/release/lkmake" "${pkgdir}/usr/bin/lkmake"
+    install -Dm 755 "./target/release/lkmake" "${pkgdir}/usr/bin/lkmake"
     echo "--> [PACKAGE] Installing lkinit...."
-    install -Dm755 "./target/release/lkinit" "${pkgdir}/usr/bin/lkinit"
+    install -Dm 755 "./target/release/lkinit" "${pkgdir}/usr/bin/lkinit"
     if [ -f "./etc/lkinit.d/init.rs" ]; then
-        install -Dm644 "./etc/lkinit.d/init.rs" "${pkgdir}/etc/lkinit.d/init.rs"
+        install -Dm 644 "./etc/lkinit.d/init.rs" "${pkgdir}/etc/lkinit.d/init.rs"
     fi
     if [ -f "./etc/lkinit.d/Cargo.toml" ]; then
-        install -Dm644 "./etc/lkinit.d/Cargo.toml" "${pkgdir}/etc/lkinit.d/Cargo.toml"
+        install -Dm 644 "./etc/lkinit.d/Cargo.toml" "${pkgdir}/etc/lkinit.d/Cargo.toml"
     fi
     echo "--> [PACKAGE] Installing lkchroot...."
-    install -Dm755 "./target/release/lkchroot" "${pkgdir}/usr/bin/lkchroot"
+    install -Dm 755 "./target/release/lkchroot" "${pkgdir}/usr/bin/lkchroot"
 }

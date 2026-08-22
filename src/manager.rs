@@ -68,6 +68,33 @@ fn remove_remote_source(source: &str, path: &Path) {
     }
 }
 
+fn install_with_backups_awareness(
+    cfg: &Config,
+    db: &Database,
+    metadata: &pkg::PackageMetadata,
+    path: &Path,
+) -> Result<(Vec<PathBuf>, Vec<PathBuf>, HashMap<String, String>), LkpmError> {
+    let previous_hashes = find_installed_package(db, &metadata.name)?
+        .map(|p| p.backups_hashes)
+        .unwrap_or_default();
+    let result =
+        pkg::install_package_with_backups(path, &cfg.install_root, &metadata.backups, &previous_hashes, None)
+            .map_err(LkpmError::from)?;
+    for new_file in result.preserved_as_new.iter() {
+        ui::warning(&format!(
+            "{} was modified locally! New package version saved to {}.",
+            new_file.with_extension("").display(),
+            new_file.display()
+        ));
+    }
+    let backups_paths: Vec<PathBuf> = metadata
+        .backups
+        .iter()
+        .map(|p| cfg.install_root.join(p))
+        .collect();
+    Ok((result.installed_files, backups_paths, result.backups_hashes))
+}
+
 fn package_list_contains(list: &[String], package: &str) -> bool {
     let lower_pkg = package.to_ascii_lowercase();
     let lower_canonical = repo::canonical_package_name(package).to_ascii_lowercase();
@@ -400,6 +427,144 @@ fn apply_root_override(cfg: &mut Config, root: Option<PathBuf>) -> Result<(), Lk
     Ok(())
 }
 
+fn install_local_packages(
+    cfg: &Config,
+    db: &mut Database,
+    packages: Vec<String>,
+    install_deps: bool,
+    noconfirm: bool,
+) -> Result<(), LkpmError> {
+    if packages.is_empty() {
+        return Err(LkpmError::Other(
+            "No local package file(s) specified for installation!".into(),
+        ));
+    }
+    require_root_for_install_root(cfg)?;
+    ui::start_operation("Starting local installation....");
+    let duration = Instant::now();
+    let mut targets = Vec::new();
+    for raw in packages.iter() {
+        let path = PathBuf::from(raw);
+        if !path.exists() || !path.is_file() {
+            return Err(LkpmError::Other(format!(
+                "Local package file {} was not found!",
+                raw
+            )));
+        }
+        let metadata = pkg::read_package_metadata(&path).map_err(LkpmError::from)?;
+        validate_package_metadata(cfg, &metadata)?;
+        targets.push((path, metadata));
+    }
+    ui::info(&format!("About to install {} local package(s):", targets.len()));
+    for (path, metadata) in targets.iter() {
+        println!(
+            "    > {} ({}) [{}]",
+            metadata.name.bright_yellow(),
+            metadata.version.bright_green(),
+            path.display()
+        );
+    }
+    let mut missing_deps: Vec<String> = Vec::new();
+    if install_deps {
+        for (_, metadata) in targets.iter() {
+            for dep in metadata.depends.iter() {
+                let dep_name = canonical_package_name(&pkg::normalize_dependency_name(dep));
+                if find_installed_package(db, &dep_name)?.is_none() && !missing_deps.contains(&dep_name) {
+                    missing_deps.push(dep_name);
+                }
+            }
+        }
+        if !missing_deps.is_empty() {
+            let deps: Vec<(&str, bool)> = missing_deps.iter().map(|d| (d.as_str(), false)).collect();
+            ui::dependency_report(&deps, &[]);
+        }
+    }
+    let default = true;
+    if !confirm_operation(noconfirm, "Proceed to install?", default) {
+        ui::error("Installation aborted by the user.");
+        return Ok(());
+    }
+    if !missing_deps.is_empty() {
+        ui::info(&format!(
+            "{} {} {}",
+            "Resolving".bright_cyan(),
+            missing_deps.len(),
+            "missing dependencies from configured repositories....".bright_cyan()
+        ));
+        fs::create_dir_all(&cfg.cache_path).map_err(LkpmError::Io)?;
+        let _ = repo::refresh_repo_metadata(cfg)?;
+        handle(Command::Install {
+            packages: missing_deps,
+            install_deps: true,
+            local: false,
+            noconfirm: true,
+            root: None,
+        })?;
+        *db = Database::load(cfg)?;
+    }
+    let mut results: Vec<ui::PackageSummary> = Vec::new();
+    for (path, metadata) in targets.into_iter() {
+        ui::info(&format!(
+            "Installing {} ({}) from {}....",
+            metadata.name.bright_yellow(),
+            metadata.version.bright_green(),
+            path.display()
+        ));
+        let checksum = match file_sha256(&path) {
+            Ok(sha) => sha,
+            Err(err) => {
+                ui::warning(&format!("Failed to calculate checksum for {}: {}", metadata.name, err));
+                String::new()
+            }
+        };
+        let size = package_size(&path);
+        match install_with_backups_awareness(cfg, db, &metadata, &path) {
+            Ok((files, backups, backups_hashes)) => {
+                db.register(
+                    cfg,
+                    InstalledPackage {
+                        name: metadata.name.clone(),
+                        version: metadata.version.clone(),
+                        source: path.to_string_lossy().to_string(),
+                        source_kind: "local".into(),
+                        package_path: path.clone(),
+                        checksum: checksum.clone(),
+                        files,
+                        requires: metadata.depends.clone(),
+                        optdepends: metadata.optdepends.clone(),
+                        conflicts: metadata.conflicts.clone(),
+                        provides: metadata.provides.clone(),
+                        backups,
+                        backups_hashes,
+                    },
+                )?;
+                results.push(ui::PackageSummary {
+                    name: metadata.name.clone(),
+                    version: metadata.version.clone(),
+                    source: path.display().to_string(),
+                    size,
+                    duration: duration.elapsed(),
+                    checksum,
+                    status: "installed".to_string(),
+                });
+            }
+            Err(err) => {
+                results.push(ui::PackageSummary {
+                    name: metadata.name.clone(),
+                    version: metadata.version.clone(),
+                    source: path.display().to_string(),
+                    size,
+                    duration: duration.elapsed(),
+                    checksum: String::new(),
+                    status: format!("error: {}", err),
+                });
+            }
+        }
+    }
+    ui::print_operation_summary(&results);
+    Ok(())
+}
+
 pub fn handle(cmd: Command) -> Result<(), LkpmError> {
     let mut cfg = Config::load();
     match &cmd {
@@ -414,6 +579,13 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
     ensure_storage(&cfg)?;
     let mut db = Database::load(&cfg)?;
     match cmd {
+        Command::Install {
+            packages,
+            install_deps,
+            local,
+            noconfirm,
+            ..
+        } if local => install_local_packages(&cfg, &mut db, packages, install_deps, noconfirm),
         Command::Install {
             packages,
             install_deps,
@@ -546,10 +718,9 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
                     metadata.name.bright_yellow(),
                     metadata.version.bright_green()
                 ));
-                let install_result: Result<Vec<PathBuf>, LkpmError> =
-                    pkg::install_package(&path, &cfg.install_root, None).map_err(LkpmError::from);
+                let install_result = install_with_backups_awareness(&cfg, &db, &metadata, &path);
                 match install_result {
-                    Ok(files) => {
+                    Ok((files, backups, backups_hashes)) => {
                         let size = package_size(&path);
                         let package_path = path.clone();
                         db.register(
@@ -566,6 +737,8 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
                                 optdepends: metadata.optdepends.clone(),
                                 conflicts: metadata.conflicts.clone(),
                                 provides: metadata.provides.clone(),
+                                backups,
+                                backups_hashes,
                             },
                         )?;
                         remove_remote_source(&target.source, &path);
@@ -846,10 +1019,9 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
                     target.record.version.bright_cyan(),
                     metadata.version.bright_green()
                 ));
-                let install_result: Result<Vec<PathBuf>, LkpmError> =
-                    pkg::install_package(&path, &cfg.install_root, None).map_err(LkpmError::from);
+                let install_result = install_with_backups_awareness(&cfg, &db, &metadata, &path);
                 let status = match install_result {
-                    Ok(installed_files) => {
+                    Ok((installed_files, backups, backups_hashes)) => {
                         let mut updated = target.record.clone();
                         updated.package_path = path.clone();
                         updated.version = metadata.version.clone();
@@ -858,6 +1030,8 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
                         updated.requires = metadata.depends.clone();
                         updated.optdepends = metadata.optdepends.clone();
                         updated.conflicts = metadata.conflicts.clone();
+                        updated.backups = backups;
+                        updated.backups_hashes = backups_hashes;
                         db.register(&cfg, updated)?;
                         remove_remote_source(&target.record.source, &path);
                         "updated".to_string()
@@ -933,6 +1107,8 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
                     optdepends: repo_pkg.optdepends.clone(),
                     conflicts: repo_pkg.conflicts.clone(),
                     provides: repo_pkg.provides.clone(),
+                    backups: Vec::new(),
+                    backups_hashes: HashMap::new(),
                 })
             } else {
                 None
@@ -968,6 +1144,8 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
             println!("Usage: lkpm <command> [options]");
             println!("> -i <pkgs>                  install a package(s) to the system");
             println!("> -id | -di <pkgs>           install a package(s) and its dependencies to the system");
+            println!("> -l <files>                 install a local package(s) directly from local directory, bypassing repositories");
+            println!("> -ld | -dl <files>          install a local package(s) and resolve missing dependencies from repositories");
             println!("> -u                         update the system by checking for updates to installed package(s)");
             println!("> -d <pkgs>                  delete installed package(s) from the system");
             println!("> -r                         refresh repository metadata");
@@ -991,7 +1169,7 @@ fn is_hidden_path(path: &Path) -> bool {
 }
 
 fn cleanup_package_assets(
-    _cfg: &Config,
+    cfg: &Config,
     record: &InstalledPackage,
     pb: Option<&ProgressBar>,
 ) -> Result<(), LkpmError> {
@@ -1002,6 +1180,41 @@ fn cleanup_package_assets(
     for file in record.files.iter() {
         let file_size = fs::metadata(file).ok().map(|m| m.len()).unwrap_or(0);
         if is_hidden_path(file) {
+            if let Some(pb) = pb {
+                removed += file_size;
+                pb.set_position(removed);
+            }
+            continue;
+        }
+        if record.backups.contains(file) && file.exists() {
+            let relative_key = file
+                .strip_prefix(&cfg.install_root)
+                .map(|p| p.to_string_lossy().replace('\\', "/"))
+                .unwrap_or_else(|_| file.to_string_lossy().to_string());
+            let pristine_hash = record.backups_hashes.get(&relative_key);
+            let current_hash = fs::read(file).ok().map(|data| {
+                let mut hasher = Sha256::new();
+                hasher.update(&data);
+                hex::encode(hasher.finalize())
+            });
+            let modified = matches!((&current_hash, pristine_hash), (Some(current), Some(pristine)) if current != pristine);
+            if modified {
+                let saved_name = format!(
+                    "{}.lkpmsave",
+                    file.file_name().unwrap_or_default().to_string_lossy()
+                );
+                let saved_path = file.with_file_name(saved_name);
+                if let Err(e) = fs::rename(file, &saved_path) {
+                    return Err(LkpmError::Io(e));
+                }
+                ui::warning(&format!(
+                    "{} was modified locally! Kept saved as {}.",
+                    file.display(),
+                    saved_path.display()
+                ));
+            } else if let Err(e) = fs::remove_file(file) {
+                return Err(LkpmError::Io(e));
+            }
             if let Some(pb) = pb {
                 removed += file_size;
                 pb.set_position(removed);

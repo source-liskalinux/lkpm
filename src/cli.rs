@@ -6,6 +6,7 @@ pub enum Command {
     Install {
         packages: Vec<String>,
         install_deps: bool,
+        local: bool,
         noconfirm: bool,
         root: Option<PathBuf>,
     },
@@ -75,6 +76,7 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
             Ok(Command::Install {
                 packages: filtered[1..].to_vec(),
                 install_deps: false,
+                local: false,
                 noconfirm,
                 root,
             })
@@ -86,6 +88,31 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
             Ok(Command::Install {
                 packages: filtered[1..].to_vec(),
                 install_deps: true,
+                local: false,
+                noconfirm,
+                root,
+            })
+        }
+        "-l" => {
+            if filtered.len() < 2 {
+                return Err("-l argument requires at least one local package file!".into());
+            }
+            Ok(Command::Install {
+                packages: filtered[1..].to_vec(),
+                install_deps: false,
+                local: true,
+                noconfirm,
+                root,
+            })
+        }
+        "-ld" | "-dl" => {
+            if filtered.len() < 2 {
+                return Err("-ld or -dl argument requires at least one local package file!".into());
+            }
+            Ok(Command::Install {
+                packages: filtered[1..].to_vec(),
+                install_deps: true,
+                local: true,
                 noconfirm,
                 root,
             })

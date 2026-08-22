@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
 use flate2::read::GzDecoder;
 use indicatif::ProgressBar;
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufReader, Read};
 use std::os::unix::fs::{PermissionsExt, symlink};
@@ -19,6 +21,13 @@ pub struct PackageMetadata {
     pub optdepends: Vec<String>,
     pub conflicts: Vec<String>,
     pub provides: Vec<String>,
+    pub backups: Vec<String>,
+}
+
+pub struct BackupsAwareInstall {
+    pub installed_files: Vec<PathBuf>,
+    pub backups_hashes: HashMap<String, String>,
+    pub preserved_as_new: Vec<PathBuf>,
 }
 
 pub fn read_package_metadata(path: &Path) -> Result<PackageMetadata> {
@@ -69,6 +78,23 @@ pub fn install_package(
     install_root: &Path,
     pb: Option<&ProgressBar>,
 ) -> Result<Vec<PathBuf>> {
+    let result = install_package_with_backups(path, install_root, &[], &HashMap::new(), pb)?;
+    Ok(result.installed_files)
+}
+
+fn sha256_bytes(data: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    hex::encode(hasher.finalize())
+}
+
+pub fn install_package_with_backups(
+    path: &Path,
+    install_root: &Path,
+    backups_list: &[String],
+    previous_hashes: &HashMap<String, String>,
+    pb: Option<&ProgressBar>,
+) -> Result<BackupsAwareInstall> {
     let files = list_package_files(path)?;
     let total = files.len() as u64;
     if let Some(pb) = pb {
@@ -78,6 +104,8 @@ pub fn install_package(
     let reader = open_package_reader(path)?;
     let mut archive = Archive::new(reader);
     let mut installed_files = Vec::new();
+    let mut backups_hashes = HashMap::new();
+    let mut preserved_as_new = Vec::new();
     let mut file_count = 0u64;
     for entry in archive.entries()? {
         let mut entry = entry?;
@@ -93,14 +121,53 @@ pub fn install_package(
         if let Some(parent) = dest_path.parent() {
             fs::create_dir_all(parent)?;
         }
+        let entry_key = entry_path.to_string_lossy().replace('\\', "/");
+        let is_backups = backups_list.iter().any(|b| b == &entry_key);
         match entry.header().entry_type() {
             EntryType::Regular => {
-                let mut file = File::create(&dest_path)?;
-                std::io::copy(&mut entry, &mut file)?;
-                if let Ok(mode) = entry.header().mode() {
-                    fs::set_permissions(&dest_path, fs::Permissions::from_mode(mode))?;
+                let mut buf = Vec::new();
+                std::io::copy(&mut entry, &mut buf)?;
+                let mode = entry.header().mode().ok();
+                if is_backups {
+                    let new_hash = sha256_bytes(&buf);
+                    let existing_hash = if dest_path.exists() {
+                        fs::read(&dest_path).ok().map(|d| sha256_bytes(&d))
+                    } else {
+                        None
+                    };
+                    let pristine_hash = previous_hashes.get(&entry_key);
+                    let user_modified = match (&existing_hash, pristine_hash) {
+                        (Some(current), Some(pristine)) => current != pristine,
+                        (Some(current), None) => current != &new_hash,
+                        (None, _) => false,
+                    };
+                    if user_modified {
+                        let new_path_name = format!(
+                            "{}.lkpmnew",
+                            dest_path.file_name().unwrap_or_default().to_string_lossy()
+                        );
+                        let new_path = dest_path.with_file_name(new_path_name);
+                        fs::write(&new_path, &buf)?;
+                        if let Some(mode) = mode {
+                            fs::set_permissions(&new_path, fs::Permissions::from_mode(mode)).ok();
+                        }
+                        preserved_as_new.push(new_path);
+                        installed_files.push(dest_path.clone());
+                    } else {
+                        fs::write(&dest_path, &buf)?;
+                        if let Some(mode) = mode {
+                            fs::set_permissions(&dest_path, fs::Permissions::from_mode(mode))?;
+                        }
+                        installed_files.push(dest_path.clone());
+                    }
+                    backups_hashes.insert(entry_key.clone(), new_hash);
+                } else {
+                    fs::write(&dest_path, &buf)?;
+                    if let Some(mode) = mode {
+                        fs::set_permissions(&dest_path, fs::Permissions::from_mode(mode))?;
+                    }
+                    installed_files.push(dest_path);
                 }
-                installed_files.push(dest_path);
             }
             EntryType::Symlink => {
                 let target_name = entry
@@ -129,7 +196,11 @@ pub fn install_package(
             pb.set_position(file_count);
         }
     }
-    Ok(installed_files)
+    Ok(BackupsAwareInstall {
+        installed_files,
+        backups_hashes,
+        preserved_as_new,
+    })
 }
 
 fn open_package_reader(path: &Path) -> Result<Box<dyn Read>> {
@@ -176,6 +247,7 @@ fn parse_pkginfo(text: &str) -> Result<PackageMetadata> {
     let mut optdepends = Vec::new();
     let mut conflicts = Vec::new();
     let mut provides = Vec::new();
+    let mut backups = Vec::new();
     for line in text.lines() {
         if let Some(value) = line.strip_prefix("pkgname =") {
             name = value.trim().to_string();
@@ -215,6 +287,14 @@ fn parse_pkginfo(text: &str) -> Result<PackageMetadata> {
             if !dep.is_empty() {
                 conflicts.push(dep);
             }
+        } else if let Some(value) = line
+            .strip_prefix("backup =")
+            .or_else(|| line.strip_prefix("backups ="))
+        {
+            let entry = value.trim().trim_start_matches('/').to_string();
+            if !entry.is_empty() {
+                backups.push(entry);
+            }
         }
     }
     if name.is_empty() {
@@ -231,6 +311,7 @@ fn parse_pkginfo(text: &str) -> Result<PackageMetadata> {
         optdepends,
         conflicts,
         provides,
+        backups,
     })
 }
 
@@ -285,5 +366,3 @@ pub fn normalize_dependency_name(value: &str) -> String {
     }
     without_description[..end].trim().to_string()
 }
-
-

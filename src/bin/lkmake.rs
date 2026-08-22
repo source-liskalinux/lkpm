@@ -166,7 +166,7 @@ fn list_pkg_functions(prefix: &str, cwd: &str) -> Vec<String> {
     Vec::new()
 }
 
-fn run_pkg_function(func: &str, cwd: &str, srcdir: &str, pkgdir: &str, pkgdest: &str) -> bool {
+fn run_pkg_function(func: &str, cwd: &str, srcdir: &str, pkgdir: &str, pkgdest: &str, fakeroot_state: &str) -> bool {
     let srcdir_abs = canonical_path(srcdir);
     let pkgdir_abs = canonical_path(pkgdir);
     let pkgdest_abs = canonical_path(pkgdest);
@@ -179,6 +179,7 @@ fn run_pkg_function(func: &str, cwd: &str, srcdir: &str, pkgdir: &str, pkgdest: 
     );
     let mut command = if func.starts_with("package") {
         let mut c = Command::new("fakeroot");
+        c.args(&["-i", fakeroot_state, "-s", fakeroot_state]);
         c.arg("bash");
         c
     } else {
@@ -188,7 +189,7 @@ fn run_pkg_function(func: &str, cwd: &str, srcdir: &str, pkgdir: &str, pkgdest: 
     match status { Ok(s) => s.success(), Err(_) => false }
 }
 
-fn run_pkg_phase(phase: &str, cwd: &str, srcdir: &str, pkgdir: &str, pkgdest: &str) -> bool {
+fn run_pkg_phase(phase: &str, cwd: &str, srcdir: &str, pkgdir: &str, pkgdest: &str, fakeroot_state: &str) -> bool {
     let mut funcs = Vec::new();
     if pkg_function_exists(phase, cwd) {
         funcs.push(phase.to_string());
@@ -199,7 +200,7 @@ fn run_pkg_phase(phase: &str, cwd: &str, srcdir: &str, pkgdir: &str, pkgdest: &s
     }
     for func in funcs {
         log(&format!("Running {}....", func));
-        if !run_pkg_function(&func, cwd, srcdir, pkgdir, pkgdest) {
+        if !run_pkg_function(&func, cwd, srcdir, pkgdir, pkgdest, fakeroot_state) {
             log_error(&format!("{} failed! Aborting the build process.", func));
             exit(1);
         }
@@ -207,18 +208,23 @@ fn run_pkg_phase(phase: &str, cwd: &str, srcdir: &str, pkgdir: &str, pkgdest: &s
     true
 }
 
-fn package_archive(pkgdir: &str, pkgname: &str, destdir: &str) -> bool {
+fn package_archive(pkgdir: &str, pkgname: &str, destdir: &str, fakeroot_state: &str) -> bool {
     fs::create_dir_all(destdir).ok();
     let archive = format!("{}/{}.lsk.tar.zst", destdir, pkgname);
     // Ensure files are readable so tar won't fail opening files owned by root
     let _ = Command::new("chmod").args(&["-R", "a+rX", pkgdir]).status();
-    let out = Command::new("tar").args(&["-C", pkgdir, "-I", "zstd", "-cf", &archive, "."]).output()
-        .or_else(|_| Command::new("tar").args(&["-C", pkgdir, "--zstd", "-cf", &archive, "."]).output());
+    let out = Command::new("fakeroot")
+        .args(&["-i", fakeroot_state])
+        .args(&["tar", "-C", pkgdir, "-I", "zstd", "-cf", &archive, "."])
+        .output()
+        .or_else(|_| Command::new("fakeroot")
+            .args(&["-i", fakeroot_state])
+            .args(&["tar", "-C", pkgdir, "--zstd", "-cf", &archive, "."])
+            .output());
     match out {
         Ok(o) => {
             if !o.status.success() {
-                let stderr = String::from_utf8_lossy(&o.stderr);
-                log_error(&format!("tar failed: {}", stderr.trim()));
+                log_error(&format!("tar failed: {}", String::from_utf8_lossy(&o.stderr).trim()));
             }
             o.status.success()
         }
@@ -252,7 +258,7 @@ fn write_pkginfo(pkgdir: &str) {
     let groups = array_from_pkgbuild("groups");
     let conflicts = array_from_pkgbuild("conflicts");
     let provides = array_from_pkgbuild("provides");
-    let backup = array_from_pkgbuild("backup");
+    let backups = array_from_pkgbuild("backup");
     let depends = array_from_pkgbuild("depends");
     let optdepend = array_from_pkgbuild("optdepends");
     let makedepend = array_from_pkgbuild("makedepends");
@@ -293,7 +299,7 @@ fn write_pkginfo(pkgdir: &str) {
         for v in groups { let _ = writeln!(f, "group = {}", v); }
         for v in conflicts { let _ = writeln!(f, "conflict = {}", v); }
         for v in provides { let _ = writeln!(f, "provides = {}", v); }
-        for v in backup { let _ = writeln!(f, "backup = {}", v); }
+        for v in backups { let _ = writeln!(f, "backup = {}", v); }
         for v in depends { let _ = writeln!(f, "depend = {}", v); }
         for v in optdepend { let _ = writeln!(f, "optdepend = {}", v); }
         for v in makedepend { let _ = writeln!(f, "makedepend = {}", v); }
@@ -390,6 +396,7 @@ fn main() {
     let srcdir = "src";
     let pkgdir = "pkg";
     let projectdir = "./";
+    let fakeroot_state = ".fakeroot.state";
     let _ = download_sources(srcdir);
     let ok = check_integrity(srcdir);
     if !ok { 
@@ -402,18 +409,22 @@ fn main() {
     fs::create_dir_all(srcdir).ok();
     fs::create_dir_all(pkgdir).ok();
     let cwd = projectdir;
-    let _ = run_pkg_phase("prepare", cwd, srcdir, pkgdir, projectdir);
-    let _ = run_pkg_phase("build", cwd, srcdir, pkgdir, projectdir);
-    let _ = run_pkg_phase("check", cwd, srcdir, pkgdir, projectdir);
-    let _ = run_pkg_phase("package", cwd, srcdir, pkgdir, projectdir);
+    let _ = run_pkg_phase("prepare", cwd, srcdir, pkgdir, projectdir, "");
+    let _ = run_pkg_phase("build", cwd, srcdir, pkgdir, projectdir, "");
+    let _ = run_pkg_phase("check", cwd, srcdir, pkgdir, projectdir, "");
+    let _ = run_pkg_phase("package", cwd, srcdir, pkgdir, projectdir, fakeroot_state);
     let pkgname = read_pkgname().unwrap_or_else(|| "package-unknown".to_string());
     write_pkginfo(pkgdir);
     write_buildinfo(pkgdir);
-    let success = package_archive(pkgdir, &pkgname, projectdir);
+    let success = package_archive(pkgdir, &pkgname, projectdir, fakeroot_state);
     if success { log_success(&format!("Package successfully created: {}{}.lsk.tar.zst", projectdir, pkgname)); } else { log_error("Failed to create package tarball!"); }
     if install_after && success {
         let archive = format!("{}{}.lsk.tar.zst", projectdir, pkgname);
-        let _ = run_lkpm(&["-id", &archive, "--noconfirm"]);
+        let _ = run_lkpm(&["-ld", &archive, "--noconfirm"]);
     }
-    if clean_after { let _ = fs::remove_dir_all(srcdir); let _ = fs::remove_dir_all(pkgdir); }
+    if clean_after { 
+        let _ = fs::remove_dir_all(srcdir); 
+        let _ = fs::remove_dir_all(pkgdir);
+        let _ = fs::remove_file(&fakeroot_state);
+    }
 }

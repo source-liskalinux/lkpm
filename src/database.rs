@@ -2,6 +2,7 @@ use crate::config::Config;
 use crate::error::LkpmError;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 #[cfg(unix)]
@@ -29,6 +30,10 @@ pub struct InstalledPackage {
     pub conflicts: Vec<String>,
     #[serde(default)]
     pub provides: Vec<String>,
+    #[serde(default)]
+    pub backups: Vec<PathBuf>,
+    #[serde(default)]
+    pub backups_hashes: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -64,7 +69,9 @@ impl Database {
                 requires TEXT,
                 optdepends TEXT,
                 conflicts TEXT,
-                provides TEXT
+                provides TEXT,
+                backups TEXT,
+                backups_hashes TEXT
             );",
         )
         .map_err(|e| LkpmError::Other(format!("lkpm-database.db init error: {}", e)))?;
@@ -129,9 +136,13 @@ impl Database {
             .map_err(|e| LkpmError::Other(format!("lkpm-database.db serialize conflicts error: {}", e)))?;
         let provides_json = serde_json::to_string(&package.provides)
             .map_err(|e| LkpmError::Other(format!("lkpm-database.db serialize provides error: {}", e)))?;
+        let backups_json = serde_json::to_string(&package.backups)
+            .map_err(|e| LkpmError::Other(format!("lkpm-database.db serialize backups error: {}", e)))?;
+        let backups_hashes_json = serde_json::to_string(&package.backups_hashes)
+            .map_err(|e| LkpmError::Other(format!("lkpm-database.db serialize backups_hashes error: {}", e)))?;
         conn.execute(
-            "INSERT OR REPLACE INTO installed_packages (name, version, source, source_kind, package_path, checksum, files, requires, optdepends, conflicts, provides)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            "INSERT OR REPLACE INTO installed_packages (name, version, source, source_kind, package_path, checksum, files, requires, optdepends, conflicts, provides, backups, backups_hashes)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 package.name,
                 package.version,
@@ -144,6 +155,8 @@ impl Database {
                 optdepends_json,
                 conflicts_json,
                 provides_json,
+                backups_json,
+                backups_hashes_json,
             ],
         )
         .map_err(|e| LkpmError::Other(format!("lkpm-database.db insert error: {}", e)))?;
@@ -162,34 +175,10 @@ impl Database {
     pub fn get(&self, name: &str) -> Result<Option<InstalledPackage>, LkpmError> {
         let conn = self.conn()?;
         let mut stmt = conn
-            .prepare("SELECT name, version, source, source_kind, package_path, checksum, files, requires, optdepends, conflicts, provides FROM installed_packages WHERE name = ?1")
+            .prepare("SELECT name, version, source, source_kind, package_path, checksum, files, requires, optdepends, conflicts, provides, backups, backups_hashes FROM installed_packages WHERE name = ?1")
             .map_err(|e| LkpmError::Other(format!("lkpm-database.db query prepare error: {}", e)))?;
         let mut rows = stmt
-            .query_map(params![name], |row| {
-                let files_json: String = row.get(6)?;
-                let requires_json: String = row.get(7)?;
-                let optdepends_json: String = row.get(8)?;
-                let conflicts_json: String = row.get(9)?;
-                let provides_json: String = row.get(10)?;
-                let files: Vec<String> = serde_json::from_str(&files_json).unwrap_or_default();
-                let requires: Vec<String> = serde_json::from_str(&requires_json).unwrap_or_default();
-                let optdepends: Vec<String> = serde_json::from_str(&optdepends_json).unwrap_or_default();
-                let conflicts: Vec<String> = serde_json::from_str(&conflicts_json).unwrap_or_default();
-                let provides: Vec<String> = serde_json::from_str(&provides_json).unwrap_or_default();
-                Ok(InstalledPackage {
-                    name: row.get(0)?,
-                    version: row.get(1)?,
-                    source: row.get(2)?,
-                    source_kind: row.get(3)?,
-                    package_path: PathBuf::from(row.get::<_, String>(4)?),
-                    checksum: row.get(5)?,
-                    files: files.into_iter().map(PathBuf::from).collect(),
-                    requires,
-                    optdepends,
-                    conflicts,
-                    provides,
-                })
-            })
+            .query_map(params![name], row_to_installed_package)
             .map_err(|e| LkpmError::Other(format!("lkpm-database.db query error: {}", e)))?;
         if let Some(res) = rows.next() {
             let pkg = res.map_err(|e| LkpmError::Other(format!("lkpm-database.db row error: {}", e)))?;
@@ -204,34 +193,10 @@ impl Database {
     pub fn list(&self) -> Result<Vec<InstalledPackage>, LkpmError> {
         let conn = self.conn()?;
         let mut stmt = conn
-            .prepare("SELECT name, version, source, source_kind, package_path, checksum, files, requires, optdepends, conflicts, provides FROM installed_packages")
+            .prepare("SELECT name, version, source, source_kind, package_path, checksum, files, requires, optdepends, conflicts, provides, backups, backups_hashes FROM installed_packages")
             .map_err(|e| LkpmError::Other(format!("lkpm-database.db query prepare error: {}", e)))?;
         let rows = stmt
-            .query_map([], |row| {
-                let files_json: String = row.get(6)?;
-                let requires_json: String = row.get(7)?;
-                let optdepends_json: String = row.get(8)?;
-                let conflicts_json: String = row.get(9)?;
-                let provides_json: String = row.get(10)?;
-                let files: Vec<String> = serde_json::from_str(&files_json).unwrap_or_default();
-                let requires: Vec<String> = serde_json::from_str(&requires_json).unwrap_or_default();
-                let optdepends: Vec<String> = serde_json::from_str(&optdepends_json).unwrap_or_default();
-                let conflicts: Vec<String> = serde_json::from_str(&conflicts_json).unwrap_or_default();
-                let provides: Vec<String> = serde_json::from_str(&provides_json).unwrap_or_default();
-                Ok(InstalledPackage {
-                    name: row.get(0)?,
-                    version: row.get(1)?,
-                    source: row.get(2)?,
-                    source_kind: row.get(3)?,
-                    package_path: PathBuf::from(row.get::<_, String>(4)?),
-                    checksum: row.get(5)?,
-                    files: files.into_iter().map(PathBuf::from).collect(),
-                    requires,
-                    optdepends,
-                    conflicts,
-                    provides,
-                })
-            })
+            .query_map([], row_to_installed_package)
             .map_err(|e| LkpmError::Other(format!("lkpm-database.db query error: {}", e)))?;
         let mut results = Vec::new();
         for r in rows {
@@ -239,4 +204,42 @@ impl Database {
         }
         Ok(results)
     }
+}
+
+fn row_to_installed_package(row: &rusqlite::Row) -> rusqlite::Result<InstalledPackage> {
+    let files_json: String = row.get(6)?;
+    let requires_json: String = row.get(7)?;
+    let optdepends_json: String = row.get(8)?;
+    let conflicts_json: String = row.get(9)?;
+    let provides_json: String = row.get(10)?;
+    let backups_json: Option<String> = row.get(11)?;
+    let backups_hashes_json: Option<String> = row.get(12)?;
+    let files: Vec<String> = serde_json::from_str(&files_json).unwrap_or_default();
+    let requires: Vec<String> = serde_json::from_str(&requires_json).unwrap_or_default();
+    let optdepends: Vec<String> = serde_json::from_str(&optdepends_json).unwrap_or_default();
+    let conflicts: Vec<String> = serde_json::from_str(&conflicts_json).unwrap_or_default();
+    let provides: Vec<String> = serde_json::from_str(&provides_json).unwrap_or_default();
+    let backups: Vec<String> = backups_json
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_default();
+    let backups_hashes: HashMap<String, String> = backups_hashes_json
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_default();
+    Ok(InstalledPackage {
+        name: row.get(0)?,
+        version: row.get(1)?,
+        source: row.get(2)?,
+        source_kind: row.get(3)?,
+        package_path: PathBuf::from(row.get::<_, String>(4)?),
+        checksum: row.get(5)?,
+        files: files.into_iter().map(PathBuf::from).collect(),
+        requires,
+        optdepends,
+        conflicts,
+        provides,
+        backups: backups.into_iter().map(PathBuf::from).collect(),
+        backups_hashes,
+    })
 }
