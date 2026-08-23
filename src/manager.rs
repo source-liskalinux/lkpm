@@ -24,7 +24,7 @@ fn ensure_storage(cfg: &Config) -> Result<(), LkpmError> {
 
 fn require_root() -> Result<(), LkpmError> {
     if unsafe { libc::getuid() } != 0 {
-        Err(LkpmError::Io)
+        Err(LkpmError::Other("Operation not permitted (os error 1)!".to_string()))
     } else {
         Ok(())
     }
