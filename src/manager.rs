@@ -24,7 +24,7 @@ fn ensure_storage(cfg: &Config) -> Result<(), LkpmError> {
 
 fn require_root() -> Result<(), LkpmError> {
     if unsafe { libc::getuid() } != 0 {
-        Err(LkpmError::PermissionDenied)
+        Err(LkpmError::Io)
     } else {
         Ok(())
     }

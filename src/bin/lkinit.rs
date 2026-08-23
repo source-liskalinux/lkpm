@@ -11,8 +11,8 @@ fn success(msg: &str) { println!("{} {}", "[✓]".bright_green(), msg.bright_gre
 fn error(msg: &str) { eprintln!("{} {}", "[✗]".bright_red(), msg.bright_red()); }
 
 fn require_root() {
-    if unsafe { libc::geteuid() } != 0 {
-        error("Root permission required. Use 'sudo' for this operation!");
+    if unsafe { libc::getuid() } != 0 {
+        error("Operation not permitted (os error 1)!");
         exit(1);
     }
 }
