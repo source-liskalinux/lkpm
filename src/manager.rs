@@ -23,7 +23,7 @@ fn ensure_storage(cfg: &Config) -> Result<(), LkpmError> {
 }
 
 fn require_root() -> Result<(), LkpmError> {
-    if unsafe { libc::geteuid() } != 0 {
+    if unsafe { libc::getuid() } != 0 {
         Err(LkpmError::PermissionDenied)
     } else {
         Ok(())
@@ -1108,7 +1108,6 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
             })
         }
         Command::Package { package, .. } => {
-            require_root_for_install_root(&cfg)?;
             ui::start_operation(&format!("Fetching {} information....", package));
             ensure_package_is_not_blocked(&cfg, &package)?;
             let record = if let Some(installed) = find_installed_package(&db, &package)? {
