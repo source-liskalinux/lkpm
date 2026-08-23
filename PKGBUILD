@@ -42,7 +42,7 @@ package() {
     install -d "${pkgdir}/etc"
     echo "--> [PACKAGE] Installing lkpm...."
     install -Dm 4755 "./target/release/lkpm" "${pkgdir}/usr/bin/lkpm"
-    chmod 4775 "${pkgdir}/usr/bin/lkpm"
+    chmod 4755 "${pkgdir}/usr/bin/lkpm"
     chown root:root "${pkgdir}/usr/bin/lkpm"
     if [ -f "./etc/lkpm.d/config.lua" ]; then
         install -Dm 644 "./etc/lkpm.d/config.lua" "${pkgdir}/etc/lkpm.d/config.lua"
@@ -51,6 +51,8 @@ package() {
         install -Dm 644 "./etc/lkpm.d/mirrorlist" "${pkgdir}/etc/lkpm.d/mirrorlist"
     fi
     install -dm 700 "${pkgdir}/var/db/lkpm"
+    chmod 700 "${pkgdir}/var/db/lkpm"
+    chown root:root "${pkgdir}/usr/bin/lkpm"
     echo "--> [PACKAGE] Installing lkmake...."
     install -Dm 755 "./target/release/lkmake" "${pkgdir}/usr/bin/lkmake"
     echo "--> [PACKAGE] Installing lkinit...."
