@@ -155,7 +155,7 @@ fn parse_args(args: Vec<String>) -> Result<Command, String> {
             })
         }
         "--help" => Ok(Command::Help),
-        _ => Err(format!("Unknown option '{}'", filtered[0])),
+        _ => Err(format!("Unknown option {}", filtered[0])),
     }
 }
 

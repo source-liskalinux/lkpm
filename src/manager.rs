@@ -379,9 +379,9 @@ fn build_install_target(cfg: &Config, package: &str) -> Result<InstallTarget, Lk
     }
     ensure_package_is_not_blocked(cfg, package)?;
     let repo_info = repo::find_repo_package_info(cfg, package)?
-        .ok_or_else(|| LkpmError::PackageNotFound(format!("'{}' not found in repositories!", package)))?;
+        .ok_or_else(|| LkpmError::PackageNotFound(format!("{} not found in repositories!", package)))?;
     let location = repo::find_pkg_in_repos_location(cfg, &repo_info.name)?
-        .ok_or_else(|| LkpmError::PackageNotFound(format!("Download location for '{}' not found!", package)))?;
+        .ok_or_else(|| LkpmError::PackageNotFound(format!("Download location for {} not found!", package)))?;
     Ok(InstallTarget {
         requested_name: Some(repo_info.name.clone()),
         source: match &location {
@@ -399,7 +399,7 @@ fn validate_package_metadata(
     ensure_package_is_not_blocked(cfg, &metadata.name)?;
     if !metadata.arch.is_empty() && metadata.arch != "any" && metadata.arch != cfg.arch.as_str() {
         return Err(LkpmError::Other(format!(
-            "Package architecture mismatch: expected '{}' but found '{}'.",
+            "Package architecture mismatch: expected {} but found {}.",
             cfg.arch, metadata.arch
         )));
     }
@@ -808,7 +808,7 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
                 if let Some(record) = find_installed_package(&db, pkg_name)? {
                     removals.push(record);
                 } else {
-                    return Err(LkpmError::Other(format!("'{}' is not installed on the system!", pkg_name)));
+                    return Err(LkpmError::Other(format!("{} is not installed on the system!", pkg_name)));
                 }
             }
             let mut dependents = Vec::new();
