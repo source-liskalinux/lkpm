@@ -32,10 +32,10 @@ pub fn dependency_report(required: &[(&str, bool)], optional: &[&str]) {
         } else {
             "missing".bright_red()
         };
-        println!("    > {} ({})", dep, status);
+        println!("    ‣ {} ({})", dep, status);
     }
     for dep in optional.iter() {
-        println!("    > {} ({})", dep, "optional".bright_yellow());
+        println!("    ‣ {} ({})", dep, "optional".bright_yellow());
     }
 }
 
@@ -48,7 +48,7 @@ pub fn conflict_report(conflicts: &[&str]) {
         "):".bright_yellow()
     );
     for dep in conflicts.iter() {
-        println!("    > {}", dep);
+        println!("    ‣ {}", dep);
     }
 }
 
@@ -61,13 +61,13 @@ pub fn reverse_dependency_report(dependents: &[String]) {
         "):".bright_yellow()
     );
     for dep in dependents.iter() {
-        println!("    > {}", dep);
+        println!("    ‣ {}", dep);
     }
 }
 
 pub fn confirm(prompt: &str, default: bool) -> bool {
     let def = if default { "y" } else { "n" };
-    print!("{} {} {}", "[?]".bright_yellow(), prompt.bright_yellow(), format!("[y/n] (default: {})\n    > ", def).bright_yellow());
+    print!("{} {} {}", "[?]".bright_yellow(), prompt.bright_yellow(), format!("[y/n] (default: {})\n    ‣ ", def).bright_yellow());
     io::stdout().flush().ok();
     let mut input = String::new();
     if io::stdin().read_line(&mut input).is_ok() {
@@ -91,27 +91,27 @@ pub fn print_operation_summary(entries: &[PackageSummary]) {
         if entry.status == "installed" || entry.status == "updated" || entry.status == "deleted" {
             println!("");
             sum_success(&format!("          ::: [ {} ({}) ] :::", entry.name, entry.version));
-            sum_success(&format!("        > Source      : {}", entry.source));
-            sum_success(&format!("        > Size        : {} bytes", format_bytes(entry.size)));
-            sum_success(&format!("        > Duration    : {}", format_duration(entry.duration)));
+            sum_success(&format!("        • Source      : {}", entry.source));
+            sum_success(&format!("        • Size        : {} bytes", format_bytes(entry.size)));
+            sum_success(&format!("        • Duration    : {}", format_duration(entry.duration)));
             if !entry.checksum.is_empty() {
-                sum_success(&format!("        > SHA256      : [ {} ]", entry.checksum));
+                sum_success(&format!("        • SHA256      : [ {} ]", entry.checksum));
             } else {
-                sum_success(&format!("{} {}", "        > SHA256      :", "[ FATAL: not provided by the repository! ]".bright_yellow()));
+                sum_success(&format!("{} {}", "        • SHA256      :", "[ FATAL: not provided by the repository! ]".bright_yellow()));
             }
-            sum_success(&format!("        > Status      : {}", entry.status));
+            sum_success(&format!("        • Status      : {}", entry.status));
         } else {
             println!("");
             sum_error(&format!("          ::: [ {} ({}) ] :::", entry.name, entry.version));
-            sum_error(&format!("        > Source      : {}", entry.source));
-            sum_error(&format!("        > Size        : {} bytes", format_bytes(entry.size)));
-            sum_error(&format!("        > Duration    : {}", format_duration(entry.duration)));
+            sum_error(&format!("        • Source      : {}", entry.source));
+            sum_error(&format!("        • Size        : {} bytes", format_bytes(entry.size)));
+            sum_error(&format!("        • Duration    : {}", format_duration(entry.duration)));
             if !entry.checksum.is_empty() {
-                sum_error(&format!("        > SHA256      : [ {} ]", entry.checksum));
+                sum_error(&format!("        • SHA256      : [ {} ]", entry.checksum));
             } else {
-                sum_error(&format!("{} {}", "        > SHA256      :", "[ FATAL: not provided by the repository! ]".bright_yellow()));
+                sum_error(&format!("{} {}", "        • SHA256      :", "[ FATAL: not provided by the repository! ]".bright_yellow()));
             }
-            sum_error(&format!("        > Status      : {}", entry.status));
+            sum_error(&format!("        • Status      : {}", entry.status));
         }
     }
     println!("─────────────────────────────────────────────────────────────");
