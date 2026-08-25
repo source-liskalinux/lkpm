@@ -47,19 +47,19 @@ impl Database {
             let mut builder = fs::DirBuilder::new();
             builder.recursive(true);
             #[cfg(unix)]
-            builder.mode(0o740);
+            builder.mode(0o700);
             builder.create(db_path).map_err(LkpmError::Io)?;
         }
         #[cfg(unix)]
         {
-            fs::set_permissions(db_path, fs::Permissions::from_mode(0o740))
+            fs::set_permissions(db_path, fs::Permissions::from_mode(0o700))
             .map_err(LkpmError::Io)?;
         }
         Ok(())
     }
     #[cfg(unix)]
     fn ensure_db_file_mode(db_file: &PathBuf) -> Result<(), LkpmError> {
-        fs::set_permissions(db_file, fs::Permissions::from_mode(0o640)).map_err(LkpmError::Io)
+        fs::set_permissions(db_file, fs::Permissions::from_mode(0o600)).map_err(LkpmError::Io)
     }
     #[cfg(not(unix))]
     fn ensure_db_file_mode(_db_file: &PathBuf) -> Result<(), LkpmError> {
