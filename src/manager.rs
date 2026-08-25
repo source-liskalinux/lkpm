@@ -74,10 +74,36 @@ fn install_with_backups_awareness(
     db: &Database,
     metadata: &pkg::PackageMetadata,
     path: &Path,
-) -> Result<(Vec<PathBuf>, Vec<PathBuf>, HashMap<String, String>), LkpmError> {
-    let previous_hashes = find_installed_package(db, &metadata.name)?
-        .map(|p| p.backups_hashes)
+) -> Result<(Vec<PathBuf>, Vec<PathBuf>, HashMap<String, String>, Option<String>), LkpmError> {
+    let previous = find_installed_package(db, &metadata.name)?;
+    let previous_hashes = previous
+        .as_ref()
+        .map(|p| p.backups_hashes.clone())
         .unwrap_or_default();
+    let install_script = pkg::read_package_install_script(path).map_err(LkpmError::from)?;
+    if let Some(prev) = &previous {
+        if let Err(e) = pkg::run_install_hook(
+            install_script.as_deref(),
+            "pre_upgrade",
+            &[metadata.version.as_str(), prev.version.as_str()],
+            &cfg.install_root,
+        ) {
+            return Err(LkpmError::Other(format!(
+                "pre_upgrade hook failed for {}: {}",
+                metadata.name, e
+            )));
+        }
+    } else if let Err(e) = pkg::run_install_hook(
+        install_script.as_deref(),
+        "pre_install",
+        &[metadata.version.as_str()],
+        &cfg.install_root,
+    ) {
+        return Err(LkpmError::Other(format!(
+            "pre_install hook failed for {}: {}",
+            metadata.name, e
+        )));
+    }
     let result =
         pkg::install_package_with_backups(path, &cfg.install_root, &metadata.backups, &previous_hashes, None)
             .map_err(LkpmError::from)?;
@@ -88,12 +114,29 @@ fn install_with_backups_awareness(
             new_file.display()
         ));
     }
+    if let Some(prev) = &previous {
+        if let Err(e) = pkg::run_install_hook(
+            install_script.as_deref(),
+            "post_upgrade",
+            &[metadata.version.as_str(), prev.version.as_str()],
+            &cfg.install_root,
+        ) {
+            ui::warning(&format!("post_upgrade hook failed for {}: {}", metadata.name, e));
+        }
+    } else if let Err(e) = pkg::run_install_hook(
+        install_script.as_deref(),
+        "post_install",
+        &[metadata.version.as_str()],
+        &cfg.install_root,
+    ) {
+        ui::warning(&format!("post_install hook failed for {}: {}", metadata.name, e));
+    }
     let backups_paths: Vec<PathBuf> = metadata
         .backups
         .iter()
         .map(|p| cfg.install_root.join(p))
         .collect();
-    Ok((result.installed_files, backups_paths, result.backups_hashes))
+    Ok((result.installed_files, backups_paths, result.backups_hashes, install_script))
 }
 
 fn package_list_contains(list: &[String], package: &str) -> bool {
@@ -541,7 +584,7 @@ fn install_local_packages(
         };
         let size = package_size(&path);
         match install_with_backups_awareness(cfg, db, &metadata, &path) {
-            Ok((files, backups, backups_hashes)) => {
+            Ok((files, backups, backups_hashes, install_script)) => {
                 db.register(
                     cfg,
                     InstalledPackage {
@@ -558,6 +601,7 @@ fn install_local_packages(
                         provides: metadata.provides.clone(),
                         backups,
                         backups_hashes,
+                        install_script,
                     },
                 )?;
                 results.push(ui::PackageSummary {
@@ -742,7 +786,7 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
                 ));
                 let install_result = install_with_backups_awareness(&cfg, &db, &metadata, &path);
                 match install_result {
-                    Ok((files, backups, backups_hashes)) => {
+                    Ok((files, backups, backups_hashes, install_script)) => {
                         let size = package_size(&path);
                         let package_path = path.clone();
                         db.register(
@@ -761,6 +805,7 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
                                 provides: metadata.provides.clone(),
                                 backups,
                                 backups_hashes,
+                                install_script,
                             },
                         )?;
                         remove_remote_source(&target.source, &path);
@@ -1043,7 +1088,7 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
                 ));
                 let install_result = install_with_backups_awareness(&cfg, &db, &metadata, &path);
                 let status = match install_result {
-                    Ok((installed_files, backups, backups_hashes)) => {
+                    Ok((installed_files, backups, backups_hashes, install_script)) => {
                         let mut updated = target.record.clone();
                         updated.package_path = path.clone();
                         updated.version = metadata.version.clone();
@@ -1054,6 +1099,7 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
                         updated.conflicts = metadata.conflicts.clone();
                         updated.backups = backups;
                         updated.backups_hashes = backups_hashes;
+                        updated.install_script = install_script;
                         db.register(&cfg, updated)?;
                         remove_remote_source(&target.record.source, &path);
                         "updated".to_string()
@@ -1132,6 +1178,7 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
                     provides: repo_pkg.provides.clone(),
                     backups: Vec::new(),
                     backups_hashes: HashMap::new(),
+                    install_script: None,
                 })
             } else {
                 None
@@ -1196,6 +1243,14 @@ fn cleanup_package_assets(
     record: &InstalledPackage,
     pb: Option<&ProgressBar>,
 ) -> Result<(), LkpmError> {
+    if let Err(e) = pkg::run_install_hook(
+        record.install_script.as_deref(),
+        "pre_remove",
+        &[record.version.as_str()],
+        &cfg.install_root,
+    ) {
+        ui::warning(&format!("pre_remove hook failed for {}: {}", record.name, e));
+    }
     if record.package_path.exists() {
         fs::remove_file(&record.package_path).map_err(LkpmError::Io)?;
     }
@@ -1254,6 +1309,14 @@ fn cleanup_package_assets(
     }
     if let Some(pb) = pb {
         pb.finish();
+    }
+    if let Err(e) = pkg::run_install_hook(
+        record.install_script.as_deref(),
+        "post_remove",
+        &[record.version.as_str()],
+        &cfg.install_root,
+    ) {
+        ui::warning(&format!("post_remove hook failed for {}: {}", record.name, e));
     }
     Ok(())
 }

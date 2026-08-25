@@ -2,7 +2,6 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, exit};
-use std::os::unix::process::CommandExt;
 use colored::*;
 
 fn info(msg: &str) { println!("{} {}", "[i]".bright_cyan(), msg); }
@@ -134,8 +133,13 @@ fn main() {
        std::env::set_var("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin");
        std::env::set_var("HOME", "/root");
     }
-    let err = Command::new("sh")
-        .args(&["-c", &custom_cmd])
-        .exec();
-    error(&format!("Failed to execute chroot command: {}.", err));
+    let status = Command::new("sh").args(["-c", &custom_cmd]).status();
+    drop(guard);
+    match status {
+        Ok(s) => exit(s.code().unwrap_or(1)),
+        Err(e) => {
+            error(&format!("Failed to execute chroot command: {}.", e));
+            exit(1);
+        }
+    }
 }

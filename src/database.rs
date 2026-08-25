@@ -34,6 +34,8 @@ pub struct InstalledPackage {
     pub backups: Vec<PathBuf>,
     #[serde(default)]
     pub backups_hashes: HashMap<String, String>,
+    #[serde(default)]
+    pub install_script: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -59,7 +61,7 @@ impl Database {
     }
     #[cfg(unix)]
     fn ensure_db_file_mode(db_file: &PathBuf) -> Result<(), LkpmError> {
-        fs::set_permissions(db_file, fs::Permissions::from_mode(0o600)).map_err(LkpmError::Io)
+        fs::set_permissions(db_file, fs::Permissions::from_mode(0o400)).map_err(LkpmError::Io)
     }
     #[cfg(not(unix))]
     fn ensure_db_file_mode(_db_file: &PathBuf) -> Result<(), LkpmError> {
@@ -84,7 +86,8 @@ impl Database {
                 conflicts TEXT,
                 provides TEXT,
                 backups TEXT,
-                backups_hashes TEXT
+                backups_hashes TEXT,
+                install_script TEXT
             );",
         )
         .map_err(|e| LkpmError::Other(format!("lkpm-database.db init error: {}", e)))?;
@@ -156,8 +159,8 @@ impl Database {
         let backups_hashes_json = serde_json::to_string(&package.backups_hashes)
             .map_err(|e| LkpmError::Other(format!("lkpm-database.db serialize backups_hashes error: {}", e)))?;
         conn.execute(
-            "INSERT OR REPLACE INTO installed_packages (name, version, source, source_kind, package_path, checksum, files, requires, optdepends, conflicts, provides, backups, backups_hashes)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+            "INSERT OR REPLACE INTO installed_packages (name, version, source, source_kind, package_path, checksum, files, requires, optdepends, conflicts, provides, backups, backups_hashes, install_script)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 package.name,
                 package.version,
@@ -172,6 +175,7 @@ impl Database {
                 provides_json,
                 backups_json,
                 backups_hashes_json,
+                package.install_script,
             ],
         )
         .map_err(|e| LkpmError::Other(format!("lkpm-database.db insert error: {}", e)))?;
@@ -190,7 +194,7 @@ impl Database {
     pub fn get(&self, name: &str) -> Result<Option<InstalledPackage>, LkpmError> {
         let conn = self.conn()?;
         let mut stmt = conn
-            .prepare("SELECT name, version, source, source_kind, package_path, checksum, files, requires, optdepends, conflicts, provides, backups, backups_hashes FROM installed_packages WHERE name = ?1")
+            .prepare("SELECT name, version, source, source_kind, package_path, checksum, files, requires, optdepends, conflicts, provides, backups, backups_hashes, install_script FROM installed_packages WHERE name = ?1")
             .map_err(|e| LkpmError::Other(format!("lkpm-database.db query prepare error: {}", e)))?;
         let mut rows = stmt
             .query_map(params![name], row_to_installed_package)
@@ -208,7 +212,7 @@ impl Database {
     pub fn list(&self) -> Result<Vec<InstalledPackage>, LkpmError> {
         let conn = self.conn()?;
         let mut stmt = conn
-            .prepare("SELECT name, version, source, source_kind, package_path, checksum, files, requires, optdepends, conflicts, provides, backups, backups_hashes FROM installed_packages")
+            .prepare("SELECT name, version, source, source_kind, package_path, checksum, files, requires, optdepends, conflicts, provides, backups, backups_hashes, install_script FROM installed_packages")
             .map_err(|e| LkpmError::Other(format!("lkpm-database.db query prepare error: {}", e)))?;
         let rows = stmt
             .query_map([], row_to_installed_package)
@@ -229,6 +233,7 @@ fn row_to_installed_package(row: &rusqlite::Row) -> rusqlite::Result<InstalledPa
     let provides_json: String = row.get(10)?;
     let backups_json: Option<String> = row.get(11)?;
     let backups_hashes_json: Option<String> = row.get(12)?;
+    let install_script: Option<String> = row.get(13)?;
     let files: Vec<String> = serde_json::from_str(&files_json).unwrap_or_default();
     let requires: Vec<String> = serde_json::from_str(&requires_json).unwrap_or_default();
     let optdepends: Vec<String> = serde_json::from_str(&optdepends_json).unwrap_or_default();
@@ -256,5 +261,6 @@ fn row_to_installed_package(row: &rusqlite::Row) -> rusqlite::Result<InstalledPa
         provides,
         backups: backups.into_iter().map(PathBuf::from).collect(),
         backups_hashes,
+        install_script,
     })
 }

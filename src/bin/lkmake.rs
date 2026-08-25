@@ -232,6 +232,32 @@ fn package_archive(pkgdir: &str, pkgname: &str, destdir: &str, fakeroot_state: &
     }
 }
 
+fn write_install_script(pkgdir: &str) {
+    // PKGBUILD's "install=<file>" field (same convention as
+    // makepkg/pacman): if set, that file gets embedded into the
+    // package as ".INSTALL", and lkpm runs pre_install/post_install,
+    // pre_upgrade/post_upgrade, pre_remove/post_remove out of it at the
+    // matching point of install/upgrade/removal, whichever functions it
+    // actually defines.
+    let Some(install_var) = get_var("install") else { return };
+    let install_var = install_var.trim();
+    if install_var.is_empty() {
+        return;
+    }
+    if !Path::new(install_var).exists() {
+        log_error(&format!(
+            "PKGBUILD sets install={} but that file doesn't exist! Skipping .INSTALL.",
+            install_var
+        ));
+        return;
+    }
+    let dest = format!("{}/.INSTALL", pkgdir);
+    match fs::copy(install_var, &dest) {
+        Ok(_) => log(&format!("Embedded install scriptlet from {}....", install_var)),
+        Err(e) => log_error(&format!("Failed to embed install={}: {}", install_var, e)),
+    }
+}
+
 fn get_var(var: &str) -> Option<String> {
     run_bash_capture(&format!("source ./PKGBUILD >/dev/null 2>&1 && printf '%s' \"${{{}}}\"", var))
 }
@@ -430,6 +456,7 @@ fn main() {
     let pkgname = read_pkgname().unwrap_or_else(|| "package-unknown".to_string());
     write_pkginfo(pkgdir);
     write_buildinfo(pkgdir);
+    write_install_script(pkgdir);
     let success = package_archive(pkgdir, &pkgname, projectdir, &fakeroot_state);
     let _ = fs::remove_file(&fakeroot_state);
     if success { log_success(&format!("Package successfully created: {}{}.lsk.tar.zst", projectdir, pkgname)); } else { log_error("Failed to create package tarball!"); }

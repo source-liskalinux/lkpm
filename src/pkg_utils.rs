@@ -7,6 +7,7 @@ use std::fs::{self, File};
 use std::io::{BufReader, Read};
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Component, Path, PathBuf};
+use std::process::Command;
 use tar::{Archive, EntryType};
 use xz2::read::XzDecoder;
 use zstd::Decoder;
@@ -43,6 +44,76 @@ pub fn read_package_metadata(path: &Path) -> Result<PackageMetadata> {
         }
     }
     anyhow::bail!(".PKGINFO is missing on {}!", path.display())
+}
+
+pub fn read_package_install_script(path: &Path) -> Result<Option<String>> {
+    let reader = open_package_reader(path)?;
+    let mut archive = Archive::new(reader);
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        let entry_path = sanitize_entry_path(&entry.path()?)?;
+        if entry_path == Path::new(".INSTALL") {
+            let mut text = String::new();
+            entry.read_to_string(&mut text)?;
+            return Ok(Some(text));
+        }
+    }
+    Ok(None)
+}
+
+fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+pub fn run_install_hook(
+    script: Option<&str>,
+    function: &str,
+    args: &[&str],
+    install_root: &Path,
+) -> Result<()> {
+    let Some(script) = script else {
+        return Ok(());
+    };
+    let use_chroot = install_root != Path::new("/") && install_root != Path::new("");
+    let script_name = format!(".lkpm-install-{}-{}.sh", std::process::id(), function);
+    let (host_path, shell_ref) = if use_chroot {
+        let dir = install_root.join("tmp");
+        fs::create_dir_all(&dir)
+            .with_context(|| format!("failed to create {}", dir.display()))?;
+        (dir.join(&script_name), format!("/tmp/{}", script_name))
+    } else {
+        let p = std::env::temp_dir().join(&script_name);
+        let s = p.to_string_lossy().to_string();
+        (p, s)
+    };
+    fs::write(&host_path, script)
+        .with_context(|| format!("failed to write temp install script {}", host_path.display()))?;
+
+    let arg_str = args.iter().map(|a| shell_quote(a)).collect::<Vec<_>>().join(" ");
+    let cmd = format!(
+        "source {} >/dev/null 2>&1 && if declare -f {} >/dev/null 2>&1; then {} {}; fi",
+        shell_quote(&shell_ref),
+        function,
+        function,
+        arg_str
+    );
+
+    let status = if use_chroot {
+        // lkchroot handles mounting/unmounting proc, sys, dev, dev/pts
+        // and bind-mounting /run for the duration of this one command,
+        // then tears them back down once it exits (see lkchroot.rs:
+        // it used to leak those mounts via exec(), fixed to spawn+wait
+        // so cleanup actually happens here too).
+        Command::new("lkchroot").arg(install_root).arg(&cmd).status()
+    } else {
+        Command::new("bash").current_dir(install_root).arg("-c").arg(&cmd).status()
+    };
+    let _ = fs::remove_file(&host_path);
+    match status {
+        Ok(s) if s.success() => Ok(()),
+        Ok(s) => anyhow::bail!("install script hook {} exited with {}", function, s),
+        Err(e) => Err(e).with_context(|| format!("failed to run install script hook {}", function)),
+    }
 }
 
 fn is_package_metadata_file(path: &Path) -> bool {
