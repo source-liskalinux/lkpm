@@ -1,3 +1,4 @@
+pub mod chroot;
 pub mod cli;
 pub mod config;
 pub mod database;

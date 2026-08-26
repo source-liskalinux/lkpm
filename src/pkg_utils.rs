@@ -98,22 +98,21 @@ pub fn run_install_hook(
         arg_str
     );
 
-    let status = if use_chroot {
-        // lkchroot handles mounting/unmounting proc, sys, dev, dev/pts
-        // and bind-mounting /run for the duration of this one command,
-        // then tears them back down once it exits (see lkchroot.rs:
-        // it used to leak those mounts via exec(), fixed to spawn+wait
-        // so cleanup actually happens here too).
-        Command::new("lkchroot").arg(install_root).arg(&cmd).status()
+    let status: Result<()> = if use_chroot {
+        match crate::chroot::run_in_chroot(install_root, crate::chroot::Shell::Bash(cmd.clone())) {
+            Ok(code) if code == 0 => Ok(()),
+            Ok(code) => anyhow::bail!("install script hook {} exited with status code {}", function, code),
+            Err(e) => Err(e).with_context(|| format!("failed to run install script hook {} inside chroot", function)),
+        }
     } else {
-        Command::new("bash").current_dir(install_root).arg("-c").arg(&cmd).status()
+        match Command::new("bash").current_dir(install_root).arg("-c").arg(&cmd).status() {
+            Ok(s) if s.success() => Ok(()),
+            Ok(s) => anyhow::bail!("install script hook {} exited with {}", function, s),
+            Err(e) => Err(e).with_context(|| format!("failed to run install script hook {}", function)),
+        }
     };
     let _ = fs::remove_file(&host_path);
-    match status {
-        Ok(s) if s.success() => Ok(()),
-        Ok(s) => anyhow::bail!("install script hook {} exited with {}", function, s),
-        Err(e) => Err(e).with_context(|| format!("failed to run install script hook {}", function)),
-    }
+    status
 }
 
 fn is_package_metadata_file(path: &Path) -> bool {
