@@ -194,7 +194,11 @@ pub fn download_packages_concurrently(
     for (index, res) in rx {
         match res {
             Ok(path) => results[index] = Some(path),
-            Err(..) => {
+            Err(err) => {
+                crate::ui::error(&format!(
+                    "Failed to download {}: {}",
+                    urls[index], err
+                ));
                 continue;
             }
         }

@@ -133,13 +133,6 @@ fn link_busybox_sh(busybox: &Path) -> Result<()> {
     if !sh_status.success() {
         return Err(anyhow!("Cannot create sh -> busybox symlink"));
     }
-    let bash_status = Command::new("ln")
-        .args(["-sf", "busybox", bash_link.to_str().unwrap()])
-        .status()
-        .context("Cannot create bash symlink")?;
-    if !bash_status.success() {
-        return Err(anyhow!("Cannot create bash -> busybox symlink"));
-    }
     Ok(())
 }
 
@@ -174,30 +167,69 @@ fn ensure_posix_shell(target: &Path) -> Result<()> {
     link_busybox_sh(&target_busybox)
 }
 
+fn resolve_shared_libs(binary: &Path) -> Vec<PathBuf> {
+    let output = match Command::new("ldd").arg(binary).output() {
+        Ok(o) => o,
+        Err(_) => return Vec::new(),
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let mut libs = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.contains("linux-vdso.so") {
+            continue;
+        }
+        let path_part = line.split_once("=>").map(|(_, rhs)| rhs).unwrap_or(line);
+        if let Some(path_str) = path_part.split_whitespace().next() {
+            if path_str.starts_with('/') {
+                libs.push(PathBuf::from(path_str));
+            }
+        }
+    }
+    libs
+}
+
+fn copy_into_target(target: &Path, host_path: &Path) -> Result<()> {
+    let rel = host_path.strip_prefix("/").unwrap_or(host_path);
+    let dest = target.join(rel);
+    if dest.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("Cannot create {}", parent.display()))?;
+    }
+    fs::copy(host_path, &dest)
+        .with_context(|| format!("Cannot copy {} into target", host_path.display()))?;
+    let _ = Command::new("chmod").args(["+x", dest.to_str().unwrap()]).status();
+    Ok(())
+}
+
 fn ensure_bash(target: &Path) -> Result<&'static str> {
+    for candidate in ["usr/bin/bash", "bin/bash"] {
+        if target.join(candidate).exists() {
+            return Ok("/usr/bin/bash");
+        }
+    }
     let Some(host_bash) = ["/usr/bin/bash", "/bin/bash"]
         .iter()
         .map(PathBuf::from)
         .find(|p| p.exists())
     else {
-        return Err(anyhow!("Host has no bash!"))
+        return Err(anyhow!("Target and host has no bash at all!"));
     };
-    for candidate in ["usr/bin/bash", "bin/bash"] {
-        if target.join(candidate).exists() {
-            return Ok("/usr/bin/bash");
-        } else if host_bash.exists() {
-            warning("Target has no bash at all! Copying bash from the host....");
-            let target_bin = target.join("usr/bin");
-            fs::create_dir_all(&target_bin).with_context(|| format!("Cannot create {}", target_bin.display()))?;
-            let target_bash = target_bin.join("bash");
-            fs::copy(&host_bash, &target_bash).context("Cannot copy bash into target")?;
-            let _ = Command::new("chmod").args(["+x", target_bash.to_str().unwrap()]).status();
-            return Ok("/usr/bin/bash");
-        }
+    warning("Target has no bash at all! Copying bash and its shared libraries from the host....");
+    let target_bin = target.join("usr/bin");
+    fs::create_dir_all(&target_bin).with_context(|| format!("Cannot create {}", target_bin.display()))?;
+    let target_bash = target_bin.join("bash");
+    fs::copy(&host_bash, &target_bash).context("Cannot copy bash into target")?;
+    let _ = Command::new("chmod").args(["+x", target_bash.to_str().unwrap()]).status();
+    for lib in resolve_shared_libs(&host_bash) {
+        copy_into_target(target, &lib)?;
     }
-    Err(anyhow!(
-        "Target has no bash and the host has no bash to fall back to! Install a base system first!"
-    ))
+    Ok("/usr/bin/bash")
 }
 
 fn find_interactive_shell(target: &Path) -> String {

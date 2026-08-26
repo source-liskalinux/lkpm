@@ -74,7 +74,7 @@ fn install_with_backups_awareness(
     db: &Database,
     metadata: &pkg::PackageMetadata,
     path: &Path,
-) -> Result<(Vec<PathBuf>, Vec<PathBuf>, HashMap<String, String>, Option<String>), LkpmError> {
+) -> Result<(Vec<PathBuf>, Vec<PathBuf>, HashMap<String, String>, Option<String>, Option<String>), LkpmError> {
     let previous = find_installed_package(db, &metadata.name)?;
     let previous_hashes = previous
         .as_ref()
@@ -114,6 +114,7 @@ fn install_with_backups_awareness(
             new_file.display()
         ));
     }
+    let mut hook_failure: Option<String> = None;
     if let Some(prev) = &previous {
         if let Err(e) = pkg::run_install_hook(
             install_script.as_deref(),
@@ -122,6 +123,7 @@ fn install_with_backups_awareness(
             &cfg.install_root,
         ) {
             ui::warning(&format!("post_upgrade hook failed for {}: {}", metadata.name, e));
+            hook_failure = Some(format!("post_upgrade hook failed: {}", e));
         }
     } else if let Err(e) = pkg::run_install_hook(
         install_script.as_deref(),
@@ -130,13 +132,14 @@ fn install_with_backups_awareness(
         &cfg.install_root,
     ) {
         ui::warning(&format!("post_install hook failed for {}: {}", metadata.name, e));
+        hook_failure = Some(format!("post_install hook failed: {}", e));
     }
     let backups_paths: Vec<PathBuf> = metadata
         .backups
         .iter()
         .map(|p| cfg.install_root.join(p))
         .collect();
-    Ok((result.installed_files, backups_paths, result.backups_hashes, install_script))
+    Ok((result.installed_files, backups_paths, result.backups_hashes, install_script, hook_failure))
 }
 
 fn package_list_contains(list: &[String], package: &str) -> bool {
@@ -198,6 +201,23 @@ struct PreparedInstall {
     checksum: String,
 }
 
+const BOOTSTRAP_ESSENTIALS: &[&str] = &[
+    "filesystem", "iana-etc", "glibc", "busybox", "bash", "coreutils", "util-linux", "kmod",
+];
+
+fn is_bootstrap_essential(name: &str) -> bool {
+    BOOTSTRAP_ESSENTIALS.contains(&name)
+}
+
+fn pick_next(ready: &mut Vec<String>) -> Option<String> {
+    let idx = ready
+        .iter()
+        .enumerate()
+        .min_by_key(|(_, name)| (!is_bootstrap_essential(name), name.as_str()))
+        .map(|(i, _)| i)?;
+    Some(ready.remove(idx))
+}
+
 fn topological_install_order_from_planned(
     planned: &HashMap<String, PlannedInstall>,
 ) -> Result<Vec<String>, LkpmError> {
@@ -220,14 +240,14 @@ fn topological_install_order_from_planned(
             }
         }
     }
-    let mut queue: VecDeque<String> = in_degree
+    let mut ready: Vec<String> = in_degree
         .iter()
         .filter(|&(_, &deg)| deg == 0)
         .map(|(node, _)| node.clone())
         .collect();
     let mut order = Vec::new();
     while order.len() < planned.len() {
-        if let Some(node) = queue.pop_front() {
+        if let Some(node) = pick_next(&mut ready) {
             order.push(node.clone());
             if let Some(neighbors) = graph.get(&node) {
                 for neighbor in neighbors {
@@ -235,7 +255,7 @@ fn topological_install_order_from_planned(
                         if *deg > 0 {
                             *deg -= 1;
                             if *deg == 0 {
-                                queue.push_back(neighbor.clone());
+                                ready.push(neighbor.clone());
                             }
                         }
                     }
@@ -245,11 +265,11 @@ fn topological_install_order_from_planned(
             let next_node = in_degree
                 .iter()
                 .filter(|(node, _)| !order.contains(node))
-                .min_by_key(|&(_, &deg)| deg)
+                .min_by_key(|&(node, &deg)| (deg, node.clone()))
                 .map(|(node, _)| node.clone());
             if let Some(node) = next_node {
                 in_degree.insert(node.clone(), 0);
-                queue.push_back(node);
+                ready.push(node);
             } else {
                 break;
             }
@@ -463,7 +483,7 @@ fn apply_root_override(cfg: &mut Config, root: Option<PathBuf>) -> Result<(), Lk
             return Err(LkpmError::Other("Install root cannot be empty!".into()));
         }
         cfg.install_root = root.clone();
-        cfg.db_path = root.join("var/lib/lkpm");
+        cfg.db_path = root.join("var/db/lkpm");
         cfg.cache_path = root.join("var/cache/lkpm");
         cfg.apply_system_config_for_root(&root);
         cfg.reload_mirrorlist_for_root();
@@ -584,7 +604,7 @@ fn install_local_packages(
         };
         let size = package_size(&path);
         match install_with_backups_awareness(cfg, db, &metadata, &path) {
-            Ok((files, backups, backups_hashes, install_script)) => {
+            Ok((files, backups, backups_hashes, install_script, hook_failure)) => {
                 db.register(
                     cfg,
                     InstalledPackage {
@@ -604,6 +624,10 @@ fn install_local_packages(
                         install_script,
                     },
                 )?;
+                let status = match hook_failure {
+                    Some(reason) => format!("installed (warning: {})", reason),
+                    None => "installed".to_string(),
+                };
                 results.push(ui::PackageSummary {
                     name: metadata.name.clone(),
                     version: metadata.version.clone(),
@@ -611,7 +635,7 @@ fn install_local_packages(
                     size,
                     duration: duration.elapsed(),
                     checksum,
-                    status: "installed".to_string(),
+                    status,
                 });
             }
             Err(err) => {
@@ -786,7 +810,7 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
                 ));
                 let install_result = install_with_backups_awareness(&cfg, &db, &metadata, &path);
                 match install_result {
-                    Ok((files, backups, backups_hashes, install_script)) => {
+                    Ok((files, backups, backups_hashes, install_script, hook_failure)) => {
                         let size = package_size(&path);
                         let package_path = path.clone();
                         db.register(
@@ -809,6 +833,10 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
                             },
                         )?;
                         remove_remote_source(&target.source, &path);
+                        let status = match hook_failure {
+                            Some(reason) => format!("installed (warning: {})", reason),
+                            None => "installed".to_string(),
+                        };
                         results.push(ui::PackageSummary {
                             name: metadata.name.clone(),
                             version: metadata.version.clone(),
@@ -816,7 +844,7 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
                             size,
                             duration: duration.elapsed(),
                             checksum,
-                            status: "installed".to_string(),
+                            status,
                         });
                     }
                     Err(err) => {
@@ -1088,7 +1116,7 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
                 ));
                 let install_result = install_with_backups_awareness(&cfg, &db, &metadata, &path);
                 let status = match install_result {
-                    Ok((installed_files, backups, backups_hashes, install_script)) => {
+                    Ok((installed_files, backups, backups_hashes, install_script, hook_failure)) => {
                         let mut updated = target.record.clone();
                         updated.package_path = path.clone();
                         updated.version = metadata.version.clone();
@@ -1102,7 +1130,10 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
                         updated.install_script = install_script;
                         db.register(&cfg, updated)?;
                         remove_remote_source(&target.record.source, &path);
-                        "updated".to_string()
+                        match hook_failure {
+                            Some(reason) => format!("updated (warning: {})", reason),
+                            None => "updated".to_string(),
+                        }
                     }
                     Err(err) => format!("error: {}", err),
                 };
