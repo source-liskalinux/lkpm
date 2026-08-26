@@ -131,7 +131,7 @@ fn link_busybox_sh(busybox: &Path) -> Result<()> {
         .status()
         .context("Cannot create sh symlink")?;
     if !sh_status.success() {
-        return Err(anyhow!("Cannot create sh -> busybox symlink"));
+        return Err(anyhow!("Cannot create sh ➔ busybox symlink"));
     }
     Ok(())
 }

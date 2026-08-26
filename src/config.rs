@@ -115,6 +115,17 @@ impl Config {
             self.extra_mirrors = mirrorlist.extra;
         }
     }
+    // Where downloaded package archives are staged before install, e.g.
+    // "/var/cache/lkpm/download/<pkg>.tar.zst".
+    pub fn download_dir(&self) -> PathBuf {
+        self.cache_path.join("download")
+    }
+    // Where each package ".INSTALL" script is staged while its hooks
+    // run, e.g. "/var/cache/lkpm/install/<pkg>-<hook>-<pid>.sh". Kept
+    // separate from "download_dir" so the two never collide.
+    pub fn install_script_dir(&self) -> PathBuf {
+        self.cache_path.join("install")
+    }
 }
 
 #[derive(Default)]

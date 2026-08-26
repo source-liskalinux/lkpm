@@ -69,12 +69,29 @@ fn remove_remote_source(source: &str, path: &Path) {
     }
 }
 
-fn install_with_backups_awareness(
+// Result of extracting a single package to disk, carrying everything needed
+// to (a) register it in the db and (b) run its post_install or post_upgrade
+// hook later, once every package in the batch has been extracted.
+struct ExtractedPackage {
+    metadata: pkg::PackageMetadata,
+    installed_files: Vec<PathBuf>,
+    backups_paths: Vec<PathBuf>,
+    backups_hashes: HashMap<String, String>,
+    install_script: Option<String>,
+    previous_version: Option<String>,
+}
+
+// Phase 1: run pre_install or pre_upgrade, then extract the package's files
+// to "install_root". Does NOT run post_install or post_upgrade, that happens
+// in "run_post_install_hook" after every package in the batch is extracted
+// so a post hook that needs to chroot in (e.g. during bootstrap) can rely
+// on the full set of packages already being on disk.
+fn extract_package(
     cfg: &Config,
     db: &Database,
     metadata: &pkg::PackageMetadata,
     path: &Path,
-) -> Result<(Vec<PathBuf>, Vec<PathBuf>, HashMap<String, String>, Option<String>, Option<String>), LkpmError> {
+) -> Result<ExtractedPackage, LkpmError> {
     let previous = find_installed_package(db, &metadata.name)?;
     let previous_hashes = previous
         .as_ref()
@@ -83,10 +100,11 @@ fn install_with_backups_awareness(
     let install_script = pkg::read_package_install_script(path).map_err(LkpmError::from)?;
     if let Some(prev) = &previous {
         if let Err(e) = pkg::run_install_hook(
+            cfg,
+            &metadata.name,
             install_script.as_deref(),
             "pre_upgrade",
             &[metadata.version.as_str(), prev.version.as_str()],
-            &cfg.install_root,
         ) {
             return Err(LkpmError::Other(format!(
                 "pre_upgrade hook failed for {}: {}",
@@ -94,10 +112,11 @@ fn install_with_backups_awareness(
             )));
         }
     } else if let Err(e) = pkg::run_install_hook(
+        cfg,
+        &metadata.name,
         install_script.as_deref(),
         "pre_install",
         &[metadata.version.as_str()],
-        &cfg.install_root,
     ) {
         return Err(LkpmError::Other(format!(
             "pre_install hook failed for {}: {}",
@@ -114,32 +133,49 @@ fn install_with_backups_awareness(
             new_file.display()
         ));
     }
-    let mut hook_failure: Option<String> = None;
-    if let Some(prev) = &previous {
-        if let Err(e) = pkg::run_install_hook(
-            install_script.as_deref(),
-            "post_upgrade",
-            &[metadata.version.as_str(), prev.version.as_str()],
-            &cfg.install_root,
-        ) {
-            ui::warning(&format!("post_upgrade hook failed for {}: {}", metadata.name, e));
-            hook_failure = Some(format!("post_upgrade hook failed: {}", e));
-        }
-    } else if let Err(e) = pkg::run_install_hook(
-        install_script.as_deref(),
-        "post_install",
-        &[metadata.version.as_str()],
-        &cfg.install_root,
-    ) {
-        ui::warning(&format!("post_install hook failed for {}: {}", metadata.name, e));
-        hook_failure = Some(format!("post_install hook failed: {}", e));
-    }
     let backups_paths: Vec<PathBuf> = metadata
         .backups
         .iter()
         .map(|p| cfg.install_root.join(p))
         .collect();
-    Ok((result.installed_files, backups_paths, result.backups_hashes, install_script, hook_failure))
+    Ok(ExtractedPackage {
+        metadata: metadata.clone(),
+        installed_files: result.installed_files,
+        backups_paths,
+        backups_hashes: result.backups_hashes,
+        install_script,
+        previous_version: previous.map(|p| p.version),
+    })
+}
+
+// Phase 2: run post_install or post_upgrade for an already-extracted package.
+// Call this only after every package in the batch has gone through
+// "extract_package" (and ideally been registered in the db), so hooks that
+// chroot in can find every file they depend on already in place.
+fn run_post_install_hook(cfg: &Config, extracted: &ExtractedPackage) -> Option<String> {
+    let metadata = &extracted.metadata;
+    if let Some(prev_version) = &extracted.previous_version {
+        if let Err(e) = pkg::run_install_hook(
+            cfg,
+            &metadata.name,
+            extracted.install_script.as_deref(),
+            "post_upgrade",
+            &[metadata.version.as_str(), prev_version.as_str()],
+        ) {
+            ui::warning(&format!("post_upgrade hook failed for {}: {}", metadata.name, e));
+            return Some(format!("post_upgrade hook failed: {}", e));
+        }
+    } else if let Err(e) = pkg::run_install_hook(
+        cfg,
+        &metadata.name,
+        extracted.install_script.as_deref(),
+        "post_install",
+        &[metadata.version.as_str()],
+    ) {
+        ui::warning(&format!("post_install hook failed for {}: {}", metadata.name, e));
+        return Some(format!("post_install hook failed: {}", e));
+    }
+    None
 }
 
 fn package_list_contains(list: &[String], package: &str) -> bool {
@@ -543,7 +579,7 @@ fn install_local_packages(
     ui::info(&format!("About to install {} local package(s):", targets.len()));
     for (path, metadata) in targets.iter() {
         println!(
-            "    > {} ({}) [{}]",
+            "    ‣ {} ({}) [{}]",
             metadata.name.bright_yellow(),
             metadata.version.bright_green(),
             path.display()
@@ -587,10 +623,23 @@ fn install_local_packages(
         })?;
         *db = Database::load(cfg)?;
     }
+    // Phase 1: extract every package first (pre_install or pre_upgrade plus
+    // file extraction). Post_install or post_upgrade hooks are deferred to phase 
+    // 2 below, run only once all packages are on disk, this is important for
+    // bootstrap installs where a post_install hook needs to chroot in and
+    // relies on other packages (e.g. busybox or bash) already being extracted.
+    struct PendingLocal {
+        path: PathBuf,
+        checksum: String,
+        size: u64,
+        extracted: ExtractedPackage,
+    }
+    let mut pending: Vec<PendingLocal> = Vec::new();
     let mut results: Vec<ui::PackageSummary> = Vec::new();
+    ui::info(&format!("{} {} {}", "Installing".bright_cyan(), targets.len(), "package(s)....".bright_cyan()));
     for (path, metadata) in targets.into_iter() {
         ui::info(&format!(
-            "Installing {} ({}) from {}....",
+            "➔ Installing {} ({}) from {}....",
             metadata.name.bright_yellow(),
             metadata.version.bright_green(),
             path.display()
@@ -603,53 +652,58 @@ fn install_local_packages(
             }
         };
         let size = package_size(&path);
-        match install_with_backups_awareness(cfg, db, &metadata, &path) {
-            Ok((files, backups, backups_hashes, install_script, hook_failure)) => {
+        match extract_package(cfg, db, &metadata, &path) {
+            Ok(extracted) => {
+                // Register in the db right away so later packages in this
+                // same batch resolve it as installed (e.g. dependents), even
+                // though its post_install hook hasn't run yet.
                 db.register(
                     cfg,
                     InstalledPackage {
-                        name: metadata.name.clone(),
-                        version: metadata.version.clone(),
+                        name: extracted.metadata.name.clone(),
+                        version: extracted.metadata.version.clone(),
                         source: path.to_string_lossy().to_string(),
                         source_kind: "local".into(),
                         package_path: path.clone(),
                         checksum: checksum.clone(),
-                        files,
-                        requires: metadata.depends.clone(),
-                        optdepends: metadata.optdepends.clone(),
-                        conflicts: metadata.conflicts.clone(),
-                        provides: metadata.provides.clone(),
-                        backups,
-                        backups_hashes,
-                        install_script,
+                        files: extracted.installed_files.clone(),
+                        requires: extracted.metadata.depends.clone(),
+                        optdepends: extracted.metadata.optdepends.clone(),
+                        conflicts: extracted.metadata.conflicts.clone(),
+                        provides: extracted.metadata.provides.clone(),
+                        backups: extracted.backups_paths.clone(),
+                        backups_hashes: extracted.backups_hashes.clone(),
+                        install_script: extracted.install_script.clone(),
                     },
                 )?;
-                let status = match hook_failure {
-                    Some(reason) => format!("installed (warning: {})", reason),
-                    None => "installed".to_string(),
-                };
-                results.push(ui::PackageSummary {
-                    name: metadata.name.clone(),
-                    version: metadata.version.clone(),
-                    source: path.display().to_string(),
-                    size,
-                    duration: duration.elapsed(),
-                    checksum,
-                    status,
-                });
+                pending.push(PendingLocal { path, checksum, size, extracted });
             }
             Err(err) => {
-                results.push(ui::PackageSummary {
-                    name: metadata.name.clone(),
-                    version: metadata.version.clone(),
-                    source: path.display().to_string(),
-                    size,
-                    duration: duration.elapsed(),
-                    checksum: String::new(),
-                    status: format!("error: {}", err),
-                });
+                return Err(LkpmError::Other(format!(
+                    "Failed to extract {} ({}): {}. Aborting the whole installation! No post_install hooks were run for any package in this batch.",
+                    metadata.name, metadata.version, err
+                )));
             }
         }
+    }
+    // Phase 2: every package that extracted cleanly now has its files on
+    // disk, so it's safe to run post_install or post_upgrade hooks in order.
+    ui::info(&format!("{} {} {}", "Running post-install hooks for".bright_cyan(), pending.len(), "package(s)....".bright_cyan()));
+    for item in pending.into_iter() {
+        let hook_failure = run_post_install_hook(cfg, &item.extracted);
+        let status = match hook_failure {
+            Some(reason) => format!("installed (warning: {})", reason),
+            None => "installed".to_string(),
+        };
+        results.push(ui::PackageSummary {
+            name: item.extracted.metadata.name.clone(),
+            version: item.extracted.metadata.version.clone(),
+            source: item.path.display().to_string(),
+            size: item.size,
+            duration: duration.elapsed(),
+            checksum: item.checksum,
+            status,
+        });
     }
     ui::print_operation_summary(&results);
     Ok(())
@@ -742,7 +796,7 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
                 ui::info(&format!("About to install {} package(s):", resolved.len()));
                 for target in resolved.iter() {
                     let pkg_name = target.requested_name.as_deref().unwrap_or(&target.source);
-                    println!("    > {}", pkg_name.bright_yellow());
+                    println!("    ‣ {}", pkg_name.bright_yellow());
                 }
                 if !confirm_operation(noconfirm, "Proceed to install?", default) {
                     ui::error("Installation aborted by the user.");
@@ -752,7 +806,7 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
             } else {
                 ui::info(&format!("About to install {} package(s):", total_installs));
                 for install in packages.iter() {
-                    println!("    > {}", install.bright_yellow());
+                    println!("    ‣ {}", install.bright_yellow());
                 }
                 if !confirm_operation(noconfirm, "Proceed to install?", default) {
                     ui::error("Installation aborted by the user.");
@@ -798,67 +852,85 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
                 prepared.len(),
                 "package(s) to system:".bright_cyan()
             ));
+            // Phase 1: extract every downloaded package first, deferring
+            // post_install or post_upgrade hooks to phase 2 below so they only
+            // run once the whole batch is on disk (needed for bootstrap
+            // installs where a hook chroots in and expects e.g. busybox or bash
+            // to already be extracted).
+            struct PendingRemote {
+                target: InstallTarget,
+                path: PathBuf,
+                checksum: String,
+                extracted: ExtractedPackage,
+            }
+            let mut pending: Vec<PendingRemote> = Vec::new();
             for prepared in prepared.into_iter() {
                 let target = prepared.target.clone();
                 let path = prepared.path.clone();
                 let metadata = prepared.metadata.clone();
                 let checksum = prepared.checksum.clone();
                 ui::info(&format!(
-                    "Installing {} ({})....",
+                    "➔ Installing {} ({})....",
                     metadata.name.bright_yellow(),
                     metadata.version.bright_green()
                 ));
-                let install_result = install_with_backups_awareness(&cfg, &db, &metadata, &path);
-                match install_result {
-                    Ok((files, backups, backups_hashes, install_script, hook_failure)) => {
-                        let size = package_size(&path);
+                match extract_package(&cfg, &db, &metadata, &path) {
+                    Ok(extracted) => {
                         let package_path = path.clone();
                         db.register(
                             &cfg,
                             InstalledPackage {
-                                name: metadata.name.clone(),
-                                version: metadata.version.clone(),
+                                name: extracted.metadata.name.clone(),
+                                version: extracted.metadata.version.clone(),
                                 source: target.source.clone(),
                                 source_kind: "remote".into(),
                                 package_path,
                                 checksum: checksum.clone(),
-                                files,
-                                requires: metadata.depends.clone(),
-                                optdepends: metadata.optdepends.clone(),
-                                conflicts: metadata.conflicts.clone(),
-                                provides: metadata.provides.clone(),
-                                backups,
-                                backups_hashes,
-                                install_script,
+                                files: extracted.installed_files.clone(),
+                                requires: extracted.metadata.depends.clone(),
+                                optdepends: extracted.metadata.optdepends.clone(),
+                                conflicts: extracted.metadata.conflicts.clone(),
+                                provides: extracted.metadata.provides.clone(),
+                                backups: extracted.backups_paths.clone(),
+                                backups_hashes: extracted.backups_hashes.clone(),
+                                install_script: extracted.install_script.clone(),
                             },
                         )?;
-                        remove_remote_source(&target.source, &path);
-                        let status = match hook_failure {
-                            Some(reason) => format!("installed (warning: {})", reason),
-                            None => "installed".to_string(),
-                        };
-                        results.push(ui::PackageSummary {
-                            name: metadata.name.clone(),
-                            version: metadata.version.clone(),
-                            source: repo::repo_source_label(&cfg, &target.source),
-                            size,
-                            duration: duration.elapsed(),
-                            checksum,
-                            status,
-                        });
+                        pending.push(PendingRemote { target, path, checksum, extracted });
                     }
                     Err(err) => {
-                        results.push(ui::PackageSummary {
-                            name: metadata.name.clone(),
-                            version: metadata.version.clone(),
-                            source: repo::repo_source_label(&cfg, &target.source),
-                            size: package_size(&path),
-                            duration: duration.elapsed(),
-                            checksum: String::new(),
-                            status: format!("error: {}", err),
-                        });
+                        return Err(LkpmError::Other(format!(
+                            "Failed to extract {} ({}): {}. Aborting the whole installation! No post_install hooks were run for any package in this batch.",
+                            metadata.name, metadata.version, err
+                        )));
                     }
                 }
+            }
+            // Phase 2: run post_install or post_upgrade now that every package
+            // in this batch has its files in place.
+            ui::info(&format!(
+                "{} {} {}",
+                "Running post-install hooks for".bright_cyan(),
+                pending.len(),
+                "package(s)....".bright_cyan()
+            ));
+            for item in pending.into_iter() {
+                let size = package_size(&item.path);
+                let hook_failure = run_post_install_hook(&cfg, &item.extracted);
+                remove_remote_source(&item.target.source, &item.path);
+                let status = match hook_failure {
+                    Some(reason) => format!("installed (warning: {})", reason),
+                    None => "installed".to_string(),
+                };
+                results.push(ui::PackageSummary {
+                    name: item.extracted.metadata.name.clone(),
+                    version: item.extracted.metadata.version.clone(),
+                    source: repo::repo_source_label(&cfg, &item.target.source),
+                    size,
+                    duration: duration.elapsed(),
+                    checksum: item.checksum,
+                    status,
+                });
             }
             ui::print_operation_summary(&results);
             Ok(())
@@ -902,7 +974,7 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
             ui::info(&format!("About to delete {} package(s):", removals.len()));
             for removal in packages.iter() {
                 println!(
-                    "    > {}",
+                    "    ‣ {}",
                     removal.bright_yellow()
                 );
             }
@@ -945,7 +1017,7 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
                     .iter()
                     .filter_map(|file| fs::metadata(file).ok().map(|m| m.len()))
                     .sum();
-                ui::info(&format!("{}{}{}", "Deleting ".bright_cyan(), record.name.bright_yellow(), " from the system....".bright_cyan()));
+                ui::info(&format!("{}{}{}", "➔ Deleting ".bright_cyan(), record.name.bright_yellow(), " from the system....".bright_cyan()));
                 let mut status = "deleted".to_string();
                 let res_opt = cleanup_results[i].take();
                 if let Some(res) = res_opt {
@@ -1053,7 +1125,7 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
             ui::info(&format!("Available updates ({}):", update_targets.len()));
             for target in update_targets.iter() {
                 println!(
-                    "    > {} ({} -> {})",
+                    "    ‣ {} ({} ➔ {})",
                     target.record.name.bright_yellow(),
                     target.record.version.bright_red(),
                     target.remote_version.bright_green()
@@ -1103,47 +1175,74 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
             }
             ui::info(&format!(
                 "{} {} {}",
-                "Extracting".bright_cyan(),
+                "Updating".bright_cyan(),
                 prepared_updates.len(),
-                "updated package(s) to system:".bright_cyan()
+                "package(s) to system:".bright_cyan()
             ));
+            // Phase 1: extract every update first, deferring post_upgrade
+            // hooks to phase 2 so they only run once the whole batch of new
+            // files is on disk.
+            struct PendingUpdate {
+                target: UpdateTarget,
+                path: PathBuf,
+                size: u64,
+                checksum: String,
+                extracted: ExtractedPackage,
+            }
+            let mut pending: Vec<PendingUpdate> = Vec::new();
             for (target, path, metadata, size, checksum) in prepared_updates.into_iter() {
                 ui::info(&format!(
-                    "Updating {} (v{} -> v{})...",
+                    "➔ Updating {} ({} ➔ {})...",
                     target.record.name.bright_yellow(),
-                    target.record.version.bright_cyan(),
+                    target.record.version.bright_yellow(),
                     metadata.version.bright_green()
                 ));
-                let install_result = install_with_backups_awareness(&cfg, &db, &metadata, &path);
-                let status = match install_result {
-                    Ok((installed_files, backups, backups_hashes, install_script, hook_failure)) => {
+                match extract_package(&cfg, &db, &metadata, &path) {
+                    Ok(extracted) => {
                         let mut updated = target.record.clone();
                         updated.package_path = path.clone();
-                        updated.version = metadata.version.clone();
+                        updated.version = extracted.metadata.version.clone();
                         updated.checksum = checksum.clone();
-                        updated.files = installed_files;
-                        updated.requires = metadata.depends.clone();
-                        updated.optdepends = metadata.optdepends.clone();
-                        updated.conflicts = metadata.conflicts.clone();
-                        updated.backups = backups;
-                        updated.backups_hashes = backups_hashes;
-                        updated.install_script = install_script;
+                        updated.files = extracted.installed_files.clone();
+                        updated.requires = extracted.metadata.depends.clone();
+                        updated.optdepends = extracted.metadata.optdepends.clone();
+                        updated.conflicts = extracted.metadata.conflicts.clone();
+                        updated.backups = extracted.backups_paths.clone();
+                        updated.backups_hashes = extracted.backups_hashes.clone();
+                        updated.install_script = extracted.install_script.clone();
                         db.register(&cfg, updated)?;
-                        remove_remote_source(&target.record.source, &path);
-                        match hook_failure {
-                            Some(reason) => format!("updated (warning: {})", reason),
-                            None => "updated".to_string(),
-                        }
+                        pending.push(PendingUpdate { target, path, size, checksum, extracted });
                     }
-                    Err(err) => format!("error: {}", err),
+                    Err(err) => {
+                        return Err(LkpmError::Other(format!(
+                            "Failed to extract {} ({}): {}. Aborting the whole update! No post_upgrade hooks were run for any package in this batch.",
+                            target.record.name, metadata.version, err
+                        )));
+                    }
+                }
+            }
+            // Phase 2: run post_upgrade now that every updated package has
+            // its new files in place.
+            ui::info(&format!(
+                "{} {} {}",
+                "Running post-upgrade hooks for".bright_cyan(),
+                pending.len(),
+                "package(s)....".bright_cyan()
+            ));
+            for item in pending.into_iter() {
+                let hook_failure = run_post_install_hook(&cfg, &item.extracted);
+                remove_remote_source(&item.target.record.source, &item.path);
+                let status = match hook_failure {
+                    Some(reason) => format!("updated (warning: {})", reason),
+                    None => "updated".to_string(),
                 };
                 results.push(ui::PackageSummary {
-                    name: target.record.name.clone(),
-                    version: metadata.version.clone(),
-                    source: repo::repo_source_label(&cfg, &target.record.source),
-                    size,
+                    name: item.target.record.name.clone(),
+                    version: item.extracted.metadata.version.clone(),
+                    source: repo::repo_source_label(&cfg, &item.target.record.source),
+                    size: item.size,
                     duration: duration.elapsed(),
-                    checksum,
+                    checksum: item.checksum,
                     status,
                 });
             }
@@ -1275,10 +1374,11 @@ fn cleanup_package_assets(
     pb: Option<&ProgressBar>,
 ) -> Result<(), LkpmError> {
     if let Err(e) = pkg::run_install_hook(
+        cfg,
+        &record.name,
         record.install_script.as_deref(),
         "pre_remove",
         &[record.version.as_str()],
-        &cfg.install_root,
     ) {
         ui::warning(&format!("pre_remove hook failed for {}: {}", record.name, e));
     }
@@ -1342,10 +1442,11 @@ fn cleanup_package_assets(
         pb.finish();
     }
     if let Err(e) = pkg::run_install_hook(
+        cfg,
+        &record.name,
         record.install_script.as_deref(),
         "post_remove",
         &[record.version.as_str()],
-        &cfg.install_root,
     ) {
         ui::warning(&format!("post_remove hook failed for {}: {}", record.name, e));
     }

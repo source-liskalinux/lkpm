@@ -448,8 +448,9 @@ pub fn download_pkg_url(
     overall_pb: Option<indicatif::ProgressBar>,
 ) -> Result<PathBuf, LkpmError> {
     let file_name = package_file_name_from_url(url);
-    let local = cfg.cache_path.join(&file_name);
-    fs::create_dir_all(&cfg.cache_path).map_err(LkpmError::Io)?;
+    let download_dir = cfg.download_dir();
+    let local = download_dir.join(&file_name);
+    fs::create_dir_all(&download_dir).map_err(LkpmError::Io)?;
     download_to(url, &local, pb.as_ref(), overall_pb.as_ref())
         .map_err(|e| LkpmError::Network(e.to_string()))
 }

@@ -11,6 +11,7 @@ use std::process::Command;
 use tar::{Archive, EntryType};
 use xz2::read::XzDecoder;
 use zstd::Decoder;
+use crate::config::Config;
 use crate::repo;
 
 #[derive(Debug, Clone)]
@@ -66,29 +67,32 @@ fn shell_quote(s: &str) -> String {
 }
 
 pub fn run_install_hook(
+    cfg: &Config,
+    package_name: &str,
     script: Option<&str>,
     function: &str,
     args: &[&str],
-    install_root: &Path,
 ) -> Result<()> {
     let Some(script) = script else {
         return Ok(());
     };
-    let use_chroot = install_root != Path::new("/") && install_root != Path::new("");
-    let script_name = format!(".lkpm-install-{}-{}.sh", std::process::id(), function);
-    let (host_path, shell_ref) = if use_chroot {
-        let dir = install_root.join("tmp");
-        fs::create_dir_all(&dir)
-            .with_context(|| format!("failed to create {}", dir.display()))?;
-        (dir.join(&script_name), format!("/tmp/{}", script_name))
-    } else {
-        let p = std::env::temp_dir().join(&script_name);
-        let s = p.to_string_lossy().to_string();
-        (p, s)
-    };
+    let install_root = &cfg.install_root;
+    let use_chroot = install_root.as_path() != Path::new("/") && install_root.as_path() != Path::new("");
+    let install_dir = cfg.install_script_dir();
+    fs::create_dir_all(&install_dir)
+        .with_context(|| format!("failed to create {}", install_dir.display()))?;
+    let script_file_name = format!("{}-{}-{}.sh", package_name, function, std::process::id());
+    let host_path = install_dir.join(&script_file_name);
     fs::write(&host_path, script)
-        .with_context(|| format!("failed to write temp install script {}", host_path.display()))?;
-
+        .with_context(|| format!("failed to write install script cache file {}", host_path.display()))?;
+    let shell_ref = if use_chroot {
+        match host_path.strip_prefix(install_root) {
+            Ok(rel) => format!("/{}", rel.to_string_lossy()),
+            Err(_) => host_path.to_string_lossy().to_string(),
+        }
+    } else {
+        host_path.to_string_lossy().to_string()
+    };
     let arg_str = args.iter().map(|a| shell_quote(a)).collect::<Vec<_>>().join(" ");
     let cmd = format!(
         "source {} >/dev/null 2>&1 && if declare -f {} >/dev/null 2>&1; then {} {}; fi",
@@ -97,7 +101,6 @@ pub fn run_install_hook(
         function,
         arg_str
     );
-
     let status: Result<()> = if use_chroot {
         match crate::chroot::run_in_chroot(install_root, crate::chroot::Shell::Bash(cmd.clone())) {
             Ok(code) if code == 0 => Ok(()),

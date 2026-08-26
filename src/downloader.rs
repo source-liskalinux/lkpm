@@ -134,10 +134,9 @@ pub fn download_packages_concurrently(
     }
     let mp = Arc::new(MultiProgress::new());
     let pb_style = ProgressStyle::default_bar()
-        .template("{spinner:.bright.green} {bar:50.bright.cyan/blue} {percent:>3}% [ {bytes:>11} | {total_bytes:>11} | {eta_precise} ] {msg}")
+        .template("➔ {bar:50.bright.cyan/blue} {percent:>3}% [ {bytes:>11} | {total_bytes:>11} | {eta_precise} ] {msg}")
         .unwrap()
-        .progress_chars("▓▒░")
-        .tick_chars("•◦");
+        .progress_chars("▓▒░");
     let overall_pb = mp.add(ProgressBar::new(total as u64));
     overall_pb.set_style(
         ProgressStyle::default_bar()
@@ -191,6 +190,7 @@ pub fn download_packages_concurrently(
     }
     drop(tx);
     let mut results = vec![None; total];
+    let mut failures: Vec<String> = Vec::new();
     for (index, res) in rx {
         match res {
             Ok(path) => results[index] = Some(path),
@@ -199,11 +199,44 @@ pub fn download_packages_concurrently(
                     "Failed to download {}: {}",
                     urls[index], err
                 ));
-                continue;
+                failures.push(format!("{}: {}", urls[index], err));
             }
         }
     }
     overall_pb.finish_and_clear();
     mp.clear().ok();
+    if !failures.is_empty() {
+        // Don't leave a half-downloaded batch lying around: wipe everything
+        // under the download cache so a retry starts clean instead of
+        // silently reusing files from a failed run.
+        clear_download_dir(cfg);
+        return Err(LkpmError::Network(format!(
+            "Failed to download {} package(s), aborting the whole batch:\n  {}",
+            failures.len(),
+            failures.join("\n  ")
+        )));
+    }
     Ok(results)
+}
+
+// Remove everything inside "cfg.download_dir()" (but keep the directory
+// itself) so a failed batch never leaves stray or partial package archives
+// around to be picked up by a later run.
+fn clear_download_dir(cfg: &Config) {
+    let dir = cfg.download_dir();
+    let entries = match fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(_) => return,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let result = if path.is_dir() {
+            fs::remove_dir_all(&path)
+        } else {
+            fs::remove_file(&path)
+        };
+        if let Err(e) = result {
+            crate::ui::warning(&format!("Failed to remove {} from download cache: {}", path.display(), e));
+        }
+    }
 }
