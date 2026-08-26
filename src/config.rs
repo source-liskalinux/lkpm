@@ -2,6 +2,8 @@ use std::fs;
 use std::path::PathBuf;
 use crate::error::LkpmError;
 use mlua::Lua;
+#[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 
 const SYSTEM_MIRRORLIST: &str = "/etc/lkpm.d/mirrorlist";
 const SYSTEM_CONFIG: &str = "/etc/lkpm.d/config.lua";
@@ -22,6 +24,21 @@ pub struct Config {
 }
 
 impl Config {
+    fn ensure_dir(dir: &PathBuf) -> Result<(), LkpmError> {
+        if !dir.exists() {
+            let mut builder = fs::DirBuilder::new();
+            builder.recursive(true);
+            #[cfg(unix)]
+            builder.mode(0o700);
+            builder.create(dir).map_err(LkpmError::Io)?;
+        }
+        #[cfg(unix)]
+        {
+            fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
+            .map_err(LkpmError::Io)?;
+        }
+        Ok(())
+    }
     pub fn load() -> Self {
         let mut cfg = Self::defaults();
         if cfg!(test) {
@@ -70,6 +87,7 @@ impl Config {
         }   
         if let Ok(val) = globals.get::<String>("cache_path") {
             self.cache_path = PathBuf::from(val);
+            let _ = Config::ensure_dir(&self.cache_path);
         }
         if let Ok(val) = globals.get::<String>("arch") {
             self.arch = val;
@@ -118,13 +136,26 @@ impl Config {
     // Where downloaded package archives are staged before install, e.g.
     // "/var/cache/lkpm/download/<pkg>.tar.zst".
     pub fn download_dir(&self) -> PathBuf {
-        self.cache_path.join("download")
+        let dir = self.cache_path.join("download");
+        let _ = Config::ensure_dir(&dir);
+        dir
     }
     // Where each package ".INSTALL" script is staged while its hooks
     // run, e.g. "/var/cache/lkpm/install/<pkg>-<hook>-<pid>.sh". Kept
     // separate from "download_dir" so the two never collide.
     pub fn install_script_dir(&self) -> PathBuf {
-        self.cache_path.join("install")
+        let dir = self.cache_path.join("install");
+        let _ = Config::ensure_dir(&dir);
+        dir
+    }
+    // Where an upgrade pre-overwrite file contents are staged, e.g.
+    // "/var/cache/lkpm/pkg-backup/<pkg>-<old-version>/....". Lets a rolled
+    // back upgrade restore the exact previous file content instead of
+    // just deleting the new files and leaving the package uninstalled.
+    pub fn pkg_backup_dir(&self) -> PathBuf {
+        let dir = self.cache_path.join("pkg-backup");
+        let _ = Config::ensure_dir(&dir);
+        dir
     }
 }
 

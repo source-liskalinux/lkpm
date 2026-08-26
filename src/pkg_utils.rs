@@ -265,11 +265,44 @@ pub fn install_package_with_backups(
                 installed_files.push(dest_path);
             }
             EntryType::Link => {
+                // A tar hard link's "link_name" is the path of another entry
+                // within this same archive (archive-root-relative, just
+                // like a regular file path), NOT a symlink-style path
+                // relative to dest_path's own directory. Treating it as a
+                // symlink target (as a plain "symlink()" call would) produces
+                // a dangling symlink, since that raw path is never resolved
+                // against install_root. Packages with many duplicate binary
+                // blobs (linux-firmware being the classic case) rely heavily
+                // on hard links, so getting this wrong silently corrupts a
+                // large fraction of such a package while still reporting
+                // "installed".
                 if let Some(target_name) = entry.link_name()? {
+                    let target_rel = sanitize_entry_path(&target_name)?;
+                    let target_path = install_root.join(&target_rel);
                     if dest_path.exists() {
                         fs::remove_file(&dest_path).ok();
                     }
-                    symlink(target_name, &dest_path)?;
+                    // Tar guarantees the linked-to file was already emitted
+                    // earlier in the stream, so it should already be on disk.
+                    match fs::hard_link(&target_path, &dest_path) {
+                        Ok(()) => {}
+                        Err(_) => {
+                            // Fall back to a plain copy if hard-linking isn't
+                            // possible (e.g. target not yet extracted due to
+                            // unusual archive ordering, or install_root spans
+                            // multiple filesystems), the file still ends up
+                            // with correct content just without the
+                            // deduplication a hard link would give.
+                            let data = fs::read(&target_path).with_context(|| {
+                                format!(
+                                    "hard link target {} (for {}) not found",
+                                    target_path.display(),
+                                    entry_path.display()
+                                )
+                            })?;
+                            fs::write(&dest_path, &data)?;
+                        }
+                    }
                     installed_files.push(dest_path);
                 }
             }

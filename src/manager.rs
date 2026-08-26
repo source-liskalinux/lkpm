@@ -79,6 +79,9 @@ struct ExtractedPackage {
     backups_hashes: HashMap<String, String>,
     install_script: Option<String>,
     previous_version: Option<String>,
+    previous_record: Option<InstalledPackage>,
+    preserved_as_new: Vec<PathBuf>,
+    backup_dir: Option<PathBuf>,
 }
 
 // Phase 1: run pre_install or pre_upgrade, then extract the package's files
@@ -123,6 +126,10 @@ fn extract_package(
             metadata.name, e
         )));
     }
+    let backup_dir = match &previous {
+        Some(prev) => Some(backup_previous_files(cfg, prev)?),
+        None => None,
+    };
     let result =
         pkg::install_package_with_backups(path, &cfg.install_root, &metadata.backups, &previous_hashes, None)
             .map_err(LkpmError::from)?;
@@ -144,7 +151,10 @@ fn extract_package(
         backups_paths,
         backups_hashes: result.backups_hashes,
         install_script,
-        previous_version: previous.map(|p| p.version),
+        previous_version: previous.as_ref().map(|p| p.version.clone()),
+        previous_record: previous,
+        preserved_as_new: result.preserved_as_new,
+        backup_dir,
     })
 }
 
@@ -175,7 +185,171 @@ fn run_post_install_hook(cfg: &Config, extracted: &ExtractedPackage) -> Option<S
         ui::warning(&format!("post_install hook failed for {}: {}", metadata.name, e));
         return Some(format!("post_install hook failed: {}", e));
     }
+    // Past this point the batch is no longer rolled back for this package
+    // (rollback only applies while extraction is still in progress), so the
+    // pre-upgrade backup has served its purpose and can be freed.
+    if let Some(backup_root) = &extracted.backup_dir {
+        if let Err(e) = fs::remove_dir_all(backup_root) {
+            ui::warning(&format!(
+                "Failed to clean up backup for {}: {}",
+                metadata.name, e
+            ));
+        }
+    }
     None
+}
+
+// Copy every file the previous version of a package owns into
+// "cfg.pkg_backup_dir()/<pkg>-<old-version>/....". (mirroring their path
+// relative to "install_root"), before the new version overwrites them.
+// Lets a rolled-back upgrade restore exact previous content instead of
+// just deleting the new files and leaving the package uninstalled.
+fn backup_previous_files(cfg: &Config, previous: &InstalledPackage) -> Result<PathBuf, LkpmError> {
+    let backup_root = cfg
+        .pkg_backup_dir()
+        .join(format!("{}-{}", previous.name, previous.version));
+    // Clear out any stale backup left over from an earlier failed attempt
+    // before writing a fresh one.
+    if backup_root.exists() {
+        fs::remove_dir_all(&backup_root).map_err(LkpmError::Io)?;
+    }
+    fs::create_dir_all(&backup_root).map_err(LkpmError::Io)?;
+    for file in previous.files.iter() {
+        let rel = file.strip_prefix(&cfg.install_root).unwrap_or(file);
+        let dest = backup_root.join(rel);
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent).map_err(LkpmError::Io)?;
+        }
+        match fs::symlink_metadata(file) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                let target = fs::read_link(file).map_err(LkpmError::Io)?;
+                std::os::unix::fs::symlink(&target, &dest).map_err(LkpmError::Io)?;
+            }
+            Ok(meta) if meta.file_type().is_file() => {
+                fs::copy(file, &dest).map_err(LkpmError::Io)?;
+            }
+            // Missing or a special file (device / fifo / socket), nothing
+            // sensible to snapshot so skip it. A rollback simply won't
+            // recreate it either.
+            _ => {}
+        }
+    }
+    Ok(backup_root)
+}
+
+// Copy every file backed up by "backup_previous_files" back to its
+// original location under "install_root".
+fn restore_backed_up_files(cfg: &Config, backup_root: &Path, previous: &InstalledPackage) {
+    for file in previous.files.iter() {
+        let rel = file.strip_prefix(&cfg.install_root).unwrap_or(file);
+        let src = backup_root.join(rel);
+        let meta = match fs::symlink_metadata(&src) {
+            Ok(meta) => meta,
+            Err(_) => continue,
+        };
+        if let Some(parent) = file.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        if meta.file_type().is_symlink() {
+            if let Ok(target) = fs::read_link(&src) {
+                let _ = fs::remove_file(file);
+                let _ = std::os::unix::fs::symlink(&target, file);
+            }
+        } else if meta.file_type().is_file() {
+            if let Err(e) = fs::copy(&src, file) {
+                ui::warning(&format!(
+                    "Failed to restore {} from backup while rolling back {}: {}",
+                    file.display(), previous.name, e
+                ));
+            }
+        }
+    }
+}
+
+fn rollback_extracted_package(cfg: &Config, db: &mut Database, extracted: &ExtractedPackage) {
+    ui::warning(&format!(
+        "Rolling back {} ({})....",
+        extracted.metadata.name, extracted.metadata.version
+    ));
+    for file in extracted.preserved_as_new.iter() {
+        if file.exists() {
+            let _ = fs::remove_file(file);
+        }
+    }
+    match (&extracted.backup_dir, &extracted.previous_record) {
+        (Some(backup_root), Some(prev)) => {
+            // Upgrade: restore every backed-up file to its previous content.
+            restore_backed_up_files(cfg, backup_root, prev);
+            // Remove any file this upgrade introduced that the old version
+            // didn't have, it has nothing to be restored to.
+            let prev_files: HashSet<&PathBuf> = prev.files.iter().collect();
+            for file in extracted.installed_files.iter() {
+                if !prev_files.contains(file) && file.exists() {
+                    if let Err(e) = fs::remove_file(file) {
+                        ui::warning(&format!(
+                            "Failed to remove new file {} while rolling back {}: {}",
+                            file.display(), extracted.metadata.name, e
+                        ));
+                    }
+                }
+            }
+            if let Err(e) = db.register(cfg, prev.clone()) {
+                ui::warning(&format!(
+                    "Failed to restore {} to {} in the package database: {}",
+                    extracted.metadata.name, prev.version, e
+                ));
+            }
+            if let Err(e) = fs::remove_dir_all(backup_root) {
+                ui::warning(&format!(
+                    "Failed to clean up backup for {}: {}",
+                    extracted.metadata.name, e
+                ));
+            }
+            ui::warning(&format!(
+                "{} restored to {}.",
+                extracted.metadata.name, prev.version
+            ));
+        }
+        (None, Some(prev)) => {
+            // Shouldn't normally happen (extract_package always backs up
+            // when there's a previous version), fall back to best-effort:
+            // remove the new files, but content can't be restored.
+            for file in extracted.installed_files.iter() {
+                if file.exists() {
+                    let _ = fs::remove_file(file);
+                }
+            }
+            if let Err(e) = db.remove(cfg, &extracted.metadata.name) {
+                ui::warning(&format!(
+                    "Failed to remove {} from the package database during rollback: {}",
+                    extracted.metadata.name, e
+                ));
+            }
+            ui::warning(&format!(
+                "{} was upgrading from {} but no backup was found! Rollback removed its new files but it could not be restored to {}!",
+                extracted.metadata.name, prev.version, prev.version
+            ));
+        }
+        (_, None) => {
+            // Fresh install: nothing existed before, so fully undo it.
+            for file in extracted.installed_files.iter() {
+                if file.exists() {
+                    if let Err(e) = fs::remove_file(file) {
+                        ui::warning(&format!(
+                            "Failed to remove {} while rolling back {}: {}",
+                            file.display(), extracted.metadata.name, e
+                        ));
+                    }
+                }
+            }
+            if let Err(e) = db.remove(cfg, &extracted.metadata.name) {
+                ui::warning(&format!(
+                    "Failed to remove {} from the package database during rollback: {}",
+                    extracted.metadata.name, e
+                ));
+            }
+        }
+    }
 }
 
 fn package_list_contains(list: &[String], package: &str) -> bool {
@@ -679,6 +853,9 @@ fn install_local_packages(
                 pending.push(PendingLocal { path, checksum, size, extracted });
             }
             Err(err) => {
+                for item in pending.into_iter().rev() {
+                    rollback_extracted_package(cfg, db, &item.extracted);
+                }
                 return Err(LkpmError::Other(format!(
                     "Failed to extract {} ({}): {}. Aborting the whole installation! No post_install hooks were run for any package in this batch.",
                     metadata.name, metadata.version, err
@@ -899,6 +1076,10 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
                         pending.push(PendingRemote { target, path, checksum, extracted });
                     }
                     Err(err) => {
+                        for item in pending.into_iter().rev() {
+                            rollback_extracted_package(&cfg, &mut db, &item.extracted);
+                        }
+                        crate::downloader::clear_download_dir(&cfg);
                         return Err(LkpmError::Other(format!(
                             "Failed to extract {} ({}): {}. Aborting the whole installation! No post_install hooks were run for any package in this batch.",
                             metadata.name, metadata.version, err
@@ -1214,6 +1395,10 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
                         pending.push(PendingUpdate { target, path, size, checksum, extracted });
                     }
                     Err(err) => {
+                        for item in pending.into_iter().rev() {
+                            rollback_extracted_package(&cfg, &mut db, &item.extracted);
+                        }
+                        crate::downloader::clear_download_dir(&cfg);
                         return Err(LkpmError::Other(format!(
                             "Failed to extract {} ({}): {}. Aborting the whole update! No post_upgrade hooks were run for any package in this batch.",
                             target.record.name, metadata.version, err

@@ -222,7 +222,7 @@ pub fn download_packages_concurrently(
 // Remove everything inside "cfg.download_dir()" (but keep the directory
 // itself) so a failed batch never leaves stray or partial package archives
 // around to be picked up by a later run.
-fn clear_download_dir(cfg: &Config) {
+pub fn clear_download_dir(cfg: &Config) {
     let dir = cfg.download_dir();
     let entries = match fs::read_dir(&dir) {
         Ok(entries) => entries,
