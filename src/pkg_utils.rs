@@ -5,7 +5,6 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufReader, Read};
-use std::os::unix::fs::symlink;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use tar::{Archive, EntryType};
@@ -13,6 +12,8 @@ use xz2::read::XzDecoder;
 use zstd::Decoder;
 use crate::config::Config;
 use crate::repo;
+#[cfg(unix)]
+use std::os::unix::fs::{lchown, symlink, MetadataExt};
 
 #[derive(Debug, Clone)]
 pub struct PackageMetadata {
@@ -183,13 +184,30 @@ fn copy_or_replace_file(src: &Path, dst: &Path) -> Result<()> {
     if let Some(parent) = dst.parent() {
         fs::create_dir_all(parent)?;
     }
-    if meta.file_type().is_symlink() {
+    let file_type = meta.file_type();
+    if dst.exists() || fs::symlink_metadata(dst).is_ok() {
+        if dst.is_dir() && !file_type.is_dir() {
+            let _ = fs::remove_dir_all(dst);
+        } else if !file_type.is_dir() {
+            let _ = fs::remove_file(dst);
+        }
+    }
+    if file_type.is_dir() {
+        fs::create_dir_all(dst)?;
+    } else if file_type.is_symlink() {
         let target = fs::read_link(src)?;
-        let _ = fs::remove_file(dst);
         symlink(&target, dst)?;
     } else {
-        let _ = fs::remove_file(dst);
-        fs::copy(src, dst)?;
+        if fs::rename(src, dst).is_err() {
+            fs::copy(src, dst)?;
+        }
+    }
+    #[cfg(unix)]
+    {
+        if !file_type.is_symlink() {
+            let _ = fs::set_permissions(dst, meta.permissions());
+        }
+        let _ = lchown(dst, Some(meta.uid()), Some(meta.gid()));
     }
     Ok(())
 }
@@ -235,7 +253,15 @@ pub fn install_package_with_backups(
         if !entry.unpack_in(tmp_path)? {
             continue;
         }
-        if is_backup && target_path.exists() {
+        if staged_path.is_dir() {
+            fs::create_dir_all(&target_path)?;
+            installed_files.push(target_path);
+            if let Some(pb) = pb {
+                pb.inc(1);
+            }
+            continue;
+        }
+        if is_backup && target_path.exists() && target_path.is_file() {
             let existing_hash = hash_file(&target_path).unwrap_or_default();
             let pristine_hash = previous_hashes.get(&rel_str);
             let modified = match pristine_hash {
@@ -255,7 +281,7 @@ pub fn install_package_with_backups(
         }
         copy_or_replace_file(&staged_path, &target_path)?;
         installed_files.push(target_path.clone());
-        if is_backup && target_path.exists() {
+        if is_backup && target_path.exists() && target_path.is_file() {
             if let Ok(new_hash) = hash_file(&target_path) {
                 backups_hashes.insert(rel_str, new_hash);
             }
