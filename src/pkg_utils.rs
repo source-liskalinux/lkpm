@@ -220,8 +220,6 @@ pub fn install_package_with_backups(
     update_backup_root: &Path,
     pb: Option<&ProgressBar>,
 ) -> Result<BackupsAwareInstall> {
-    let reader = open_package_reader(package_path)?;
-    let mut archive = Archive::new(reader);
     let conf = Config::load();
     let tmp_base = Config::tmp_install_dir(&conf);
     let pid = std::process::id();
@@ -233,6 +231,13 @@ pub fn install_package_with_backups(
     fs::create_dir_all(&tmp_dir)?;
     let _guard = TempDirGuard(&tmp_dir);
     let tmp_path = tmp_dir.as_path();
+    {
+        let reader = open_package_reader(package_path)?;
+        let mut archive = Archive::new(reader);
+        archive.unpack(tmp_path)?;
+    }
+    let reader = open_package_reader(package_path)?;
+    let mut archive = Archive::new(reader);
     let backup_set: HashMap<String, String> = backups
         .iter()
         .map(|b| (b.trim_start_matches('/').replace('\\', "/"), b.clone()))
@@ -241,7 +246,7 @@ pub fn install_package_with_backups(
     let mut backups_hashes = HashMap::new();
     let mut update_backups = Vec::new();
     for entry in archive.entries()? {
-        let mut entry = entry?;
+        let entry = entry?;
         let entry_path = sanitize_entry_path(&entry.path()?)?;
         if is_package_metadata_file(&entry_path) {
             continue;
@@ -250,12 +255,15 @@ pub fn install_package_with_backups(
         let target_path = install_root.join(&entry_path);
         let staged_path = tmp_path.join(&entry_path);
         let is_backup = backup_set.contains_key(&rel_str);
-        if !entry.unpack_in(tmp_path)? {
+        if !staged_path.exists() && fs::symlink_metadata(&staged_path).is_err() {
             continue;
         }
         if staged_path.is_dir() {
+            let existed = target_path.exists();
             fs::create_dir_all(&target_path)?;
-            installed_files.push(target_path);
+            if !existed {
+                installed_files.push(target_path);
+            }
             if let Some(pb) = pb {
                 pb.inc(1);
             }

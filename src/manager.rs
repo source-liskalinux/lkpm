@@ -292,11 +292,13 @@ fn rollback_extracted_package(cfg: &Config, db: &mut Database, extracted: &Extra
                     continue;
                 }
                 if !prev_files.contains(file) && file.exists() {
-                    if let Err(e) = fs::remove_file(file) {
-                        ui::warning(&format!(
-                            "Failed to remove new file {} while rolling back {}: {}",
-                            file.display(), extracted.metadata.name, e
-                        ));
+                    if let Err(..) = fs::remove_file(file) {
+                        if let Err(e) = fs::remove_dir_all(file) {
+                            ui::warning(&format!(
+                                "Failed to remove new file {} while rolling back {}: {}",
+                                file.display(), extracted.metadata.name, e
+                            ));
+                        }
                     }
                 }
             }
@@ -323,7 +325,9 @@ fn rollback_extracted_package(cfg: &Config, db: &mut Database, extracted: &Extra
                     continue;
                 }
                 if file.exists() {
-                    let _ = fs::remove_file(file);
+                    if let Err(..) = fs::remove_file(file) {
+                        let _ = fs::remove_dir_all(file);
+                    }
                 }
             }
             if let Err(e) = db.remove(cfg, &extracted.metadata.name) {
@@ -343,11 +347,13 @@ fn rollback_extracted_package(cfg: &Config, db: &mut Database, extracted: &Extra
                     continue;
                 }
                 if file.exists() {
-                    if let Err(e) = fs::remove_file(file) {
-                        ui::warning(&format!(
-                            "Failed to remove {} while rolling back {}: {}",
-                            file.display(), extracted.metadata.name, e
-                        ));
+                    if let Err(..) = fs::remove_file(file) {
+                        if let Err(e) = fs::remove_dir_all(file) {
+                            ui::warning(&format!(
+                                "Failed to remove {} while rolling back {}: {}",
+                                file.display(), extracted.metadata.name, e
+                            ));
+                        }
                     }
                 }
             }
