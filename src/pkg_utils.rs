@@ -215,15 +215,45 @@ fn unpack_entry_safely<R: Read>(entry: &mut tar::Entry<R>, dst_root: &Path) -> R
     let entry_path = sanitize_entry_path(&raw_entry_path)?;
     let resolved_rel_path = resolve_symlink_path(dst_root, &entry_path);
     let target = dst_root.join(&resolved_rel_path);
-    if entry.header().entry_type().is_dir() {
+    if let Some(parent) = target.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let entry_type = entry.header().entry_type();
+    if entry_type.is_dir() {
         if let Ok(meta) = fs::symlink_metadata(&target) {
             if meta.file_type().is_symlink() || meta.is_dir() {
                 return Ok(());
             }
         }
+        fs::create_dir_all(&target)?;
+        return Ok(());
     }
-    if let Some(parent) = target.parent() {
-        let _ = fs::create_dir_all(parent);
+    if entry_type.is_hard_link() {
+        if let Some(link_name) = entry.link_name()? {
+            let sanitized_link = sanitize_entry_path(&link_name)?;
+            let resolved_link = resolve_symlink_path(dst_root, &sanitized_link);
+            let link_src = dst_root.join(&resolved_link);
+            let _ = fs::remove_file(&target);
+            fs::hard_link(&link_src, &target).with_context(|| {
+                format!(
+                    "Failed to hard link {} to {}",
+                    link_src.display(),
+                    target.display()
+                )
+            })?;
+            return Ok(());
+        }
+    }
+    if entry_type.is_symlink() {
+        if let Some(link_name) = entry.link_name()? {
+            let _ = fs::remove_file(&target);
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&link_name, &target)?;
+            return Ok(());
+        }
+    }
+    if target.exists() || fs::symlink_metadata(&target).is_ok() {
+        let _ = fs::remove_file(&target);
     }
     entry.unpack(&target)?;
     Ok(())

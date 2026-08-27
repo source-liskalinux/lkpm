@@ -434,9 +434,8 @@ fn main() {
     }
     let srcdir = "src";
     let pkgdir = "pkg";
-    let projectdir = "./";
+    let projectdir = env::var("HOME").unwrap();
     let fakeroot_state = fakeroot_state_path();
-    let _ = fs::remove_file(&fakeroot_state);
     let _ = download_sources(srcdir);
     let ok = check_integrity(srcdir);
     if !ok { 
@@ -448,23 +447,27 @@ fn main() {
     // top-level 'target' directory work as expected.
     fs::create_dir_all(srcdir).ok();
     fs::create_dir_all(pkgdir).ok();
-    let cwd = projectdir;
-    let _ = run_pkg_phase("prepare", cwd, srcdir, pkgdir, projectdir, "");
-    let _ = run_pkg_phase("build", cwd, srcdir, pkgdir, projectdir, "");
-    let _ = run_pkg_phase("check", cwd, srcdir, pkgdir, projectdir, "");
-    let _ = run_pkg_phase("package", cwd, srcdir, pkgdir, projectdir, &fakeroot_state);
+    let cwd = &projectdir;
+    let _ = run_pkg_phase("prepare", cwd, srcdir, pkgdir, &projectdir, "");
+    let _ = run_pkg_phase("build", cwd, srcdir, pkgdir, &projectdir, "");
+    let _ = run_pkg_phase("check", cwd, srcdir, pkgdir, &projectdir, "");
+    let _ = run_pkg_phase("package", cwd, srcdir, pkgdir, &projectdir, &fakeroot_state);
     let pkgname = read_pkgname().unwrap_or_else(|| "package-unknown".to_string());
     write_pkginfo(pkgdir);
     write_buildinfo(pkgdir);
     write_install_script(pkgdir);
-    let success = package_archive(pkgdir, &pkgname, projectdir, &fakeroot_state);
+    let success = package_archive(pkgdir, &pkgname, &projectdir, &fakeroot_state);
     let _ = fs::remove_file(&fakeroot_state);
-    if success { log_success(&format!("Package successfully created: {}{}.lsk.tar.zst", projectdir, pkgname)); } else { log_error("Failed to create package tarball!"); }
+    if success { 
+        log_success(&format!("Package successfully created: {}.lsk.tar.zst", pkgname)); 
+    } else { 
+        log_error("Failed to create package tarball!"); 
+    }
     if install_after && success {
         let archive = format!("{}{}.lsk.tar.zst", projectdir, pkgname);
         let _ = run_lkpm(&["-ld", &archive, "--noconfirm"]);
     }
-    if clean_after { 
+    if clean_after && success { 
         let _ = fs::remove_dir_all(srcdir); 
         let _ = fs::remove_dir_all(pkgdir);
     }
