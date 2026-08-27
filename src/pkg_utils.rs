@@ -180,24 +180,29 @@ fn hash_file(path: &Path) -> Result<String> {
 pub fn resolve_symlink_path(install_root: &Path, rel_path: &Path) -> PathBuf {
     let mut current = install_root.to_path_buf();
     let components: Vec<_> = rel_path.components().collect();
+    let len = components.len();
     for (i, comp) in components.iter().enumerate() {
         match comp {
             Component::Normal(name) => {
                 current.push(name);
-                let is_last = i == components.len() - 1;
-                if !is_last || current.is_dir() {
-                    if let Ok(meta) = fs::symlink_metadata(&current) {
-                        if meta.file_type().is_symlink() {
-                            if let Ok(target) = fs::read_link(&current) {
-                                let parent = current.parent().unwrap_or(install_root);
-                                let resolved = if target.is_absolute() {
-                                    install_root.join(target.strip_prefix("/").unwrap_or(&target))
-                                } else {
-                                    parent.join(target)
-                                };
-                                current = resolved;
+                if i < len - 1 {
+                    let mut depth = 0;
+                    while depth < 10 {
+                        if let Ok(meta) = fs::symlink_metadata(&current) {
+                            if meta.file_type().is_symlink() {
+                                if let Ok(target) = fs::read_link(&current) {
+                                    let parent = current.parent().unwrap_or(install_root);
+                                    current = if target.is_absolute() {
+                                        install_root.join(target.strip_prefix("/").unwrap_or(&target))
+                                    } else {
+                                        parent.join(target)
+                                    };
+                                    depth += 1;
+                                    continue;
+                                }
                             }
                         }
+                        break;
                     }
                 }
             }
@@ -210,9 +215,22 @@ pub fn resolve_symlink_path(install_root: &Path, rel_path: &Path) -> PathBuf {
         .to_path_buf()
 }
 
+fn remove_existing_path(path: &Path) {
+    if let Ok(meta) = fs::symlink_metadata(path) {
+        if meta.is_dir() && !meta.file_type().is_symlink() {
+            let _ = fs::remove_dir_all(path);
+        } else {
+            let _ = fs::remove_file(path);
+        }
+    }
+}
+
 fn unpack_entry_safely<R: Read>(entry: &mut tar::Entry<R>, dst_root: &Path) -> Result<()> {
     let raw_entry_path = entry.path()?;
     let entry_path = sanitize_entry_path(&raw_entry_path)?;
+    if is_package_metadata_file(&entry_path) {
+        return Ok(());
+    }
     let resolved_rel_path = resolve_symlink_path(dst_root, &entry_path);
     let target = dst_root.join(&resolved_rel_path);
     if let Some(parent) = target.parent() {
@@ -230,31 +248,57 @@ fn unpack_entry_safely<R: Read>(entry: &mut tar::Entry<R>, dst_root: &Path) -> R
     }
     if entry_type.is_hard_link() {
         if let Some(link_name) = entry.link_name()? {
-            let sanitized_link = sanitize_entry_path(&link_name)?;
-            let resolved_link = resolve_symlink_path(dst_root, &sanitized_link);
-            let link_src = dst_root.join(&resolved_link);
-            let _ = fs::remove_file(&target);
-            fs::hard_link(&link_src, &target).with_context(|| {
-                format!(
-                    "Failed to hard link {} to {}",
-                    link_src.display(),
-                    target.display()
-                )
-            })?;
+            remove_existing_path(&target);
+            let mut found_src: Option<PathBuf> = None;
+            let rel_components: PathBuf = link_name
+                .components()
+                .filter(|c| matches!(c, Component::Normal(_)))
+                .collect();
+            let src_a = dst_root.join(resolve_symlink_path(dst_root, &rel_components));
+            if src_a.exists() {
+                found_src = Some(src_a);
+            } else if let Some(parent) = target.parent() {
+                let src_b = parent.join(&link_name);
+                if src_b.exists() {
+                    found_src = Some(src_b);
+                }
+            }
+            if let Some(src) = found_src {
+                if fs::hard_link(&src, &target).is_err() {
+                    fs::copy(&src, &target).with_context(|| {
+                        format!("Failed to copy fallback for hard link {} ➔ {}", src.display(), target.display())
+                    })?;
+                }
+            } else {
+                let _ = entry.unpack(&target);
+            }
             return Ok(());
         }
     }
     if entry_type.is_symlink() {
         if let Some(link_name) = entry.link_name()? {
-            let _ = fs::remove_file(&target);
+            let raw_parent = entry_path.parent().unwrap_or(Path::new(""));
+            let target_of_link = if link_name.is_absolute() {
+                dst_root.join(link_name.strip_prefix("/").unwrap_or(&link_name))
+            } else {
+                let combined = raw_parent.join(&link_name);
+                dst_root.join(resolve_symlink_path(dst_root, &combined))
+            };
+            if target_of_link == target {
+                if target.exists() && !target.is_symlink() {
+                    return Ok(());
+                }
+                return Ok(());
+            }
+            remove_existing_path(&target);
             #[cfg(unix)]
-            std::os::unix::fs::symlink(&link_name, &target)?;
+            std::os::unix::fs::symlink(&link_name, &target).with_context(|| {
+                format!("Failed to create symlink {} ➔ {}", target.display(), link_name.display())
+            })?;
             return Ok(());
         }
     }
-    if target.exists() || fs::symlink_metadata(&target).is_ok() {
-        let _ = fs::remove_file(&target);
-    }
+    remove_existing_path(&target);
     entry.unpack(&target)?;
     Ok(())
 }
