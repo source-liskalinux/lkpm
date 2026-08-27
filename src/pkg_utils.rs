@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufReader, Read};
-use std::os::unix::fs::{PermissionsExt, symlink};
+use std::os::unix::fs::symlink;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use tar::{Archive, EntryType};
@@ -30,6 +30,14 @@ pub struct BackupsAwareInstall {
     pub installed_files: Vec<PathBuf>,
     pub backups_hashes: HashMap<String, String>,
     pub update_backups: Vec<PathBuf>,
+}
+
+struct TempDirGuard<'a>(&'a Path);
+
+impl Drop for TempDirGuard<'_> {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(self.0);
+    }
 }
 
 pub fn read_package_metadata(path: &Path) -> Result<PackageMetadata> {
@@ -156,172 +164,162 @@ pub fn install_package(
     Ok(result.installed_files)
 }
 
-fn sha256_bytes(data: &[u8]) -> String {
+fn hash_file(path: &Path) -> Result<String> {
+    let mut file = File::open(path)?;
     let mut hasher = Sha256::new();
-    hasher.update(data);
-    hex::encode(hasher.finalize())
+    let mut buffer = [0u8; 8192];
+    loop {
+        let n = file.read(&mut buffer)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buffer[..n]);
+    }
+    Ok(hex::encode(hasher.finalize()))
 }
 
-fn write_atomic(dest_path: &Path, buf: &[u8], mode: Option<u32>) -> Result<()> {
-    let file_name = dest_path
-        .file_name()
-        .context("Invalid destination path (no file name)")?;
-    let tmp_name = format!(".{}.lkpmtmp", file_name.to_string_lossy());
-    let tmp_path = dest_path.with_file_name(tmp_name);
-    fs::write(&tmp_path, buf)
-        .with_context(|| format!("Failed to write temp file {}", tmp_path.display()))?;
-    if let Some(mode) = mode {
-        fs::set_permissions(&tmp_path, fs::Permissions::from_mode(mode))
-            .with_context(|| format!("Failed to set permissions on {}", tmp_path.display()))?;
+fn copy_or_replace_file(src: &Path, dst: &Path) -> Result<()> {
+    let meta = fs::symlink_metadata(src)?;
+    if let Some(parent) = dst.parent() {
+        fs::create_dir_all(parent)?;
     }
-    fs::rename(&tmp_path, dest_path)
-        .with_context(|| format!("Failed to rename into place: {}", dest_path.display()))?;
+    if meta.file_type().is_symlink() {
+        let target = fs::read_link(src)?;
+        let _ = fs::remove_file(dst);
+        symlink(&target, dst)?;
+    } else {
+        let _ = fs::remove_file(dst);
+        fs::copy(src, dst)?;
+    }
+    Ok(())
+}
+
+fn process_staged_entries(
+    tmp_dir: &Path,
+    current_dir: &Path,
+    install_root: &Path,
+    backup_set: &HashMap<String, String>,
+    previous_hashes: &HashMap<String, String>,
+    update_backup_root: &Path,
+    installed_files: &mut Vec<PathBuf>,
+    backups_hashes: &mut HashMap<String, String>,
+    update_backups: &mut Vec<PathBuf>,
+    pb: Option<&ProgressBar>,
+) -> Result<()> {
+    for entry in fs::read_dir(current_dir)? {
+        let entry = entry?;
+        let staged_path = entry.path();
+        let rel_path = staged_path.strip_prefix(tmp_dir)?;
+        let rel_str = rel_path.to_string_lossy().replace('\\', "/");
+        let target_path = install_root.join(rel_path);
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            fs::create_dir_all(&target_path)?;
+            process_staged_entries(
+                tmp_dir,
+                &staged_path,
+                install_root,
+                backup_set,
+                previous_hashes,
+                update_backup_root,
+                installed_files,
+                backups_hashes,
+                update_backups,
+                pb,
+            )?;
+        } else {
+            let is_backup = backup_set.contains_key(&rel_str);
+            if is_backup {
+                let new_hash = hash_file(&staged_path)?;
+                backups_hashes.insert(rel_str.clone(), new_hash.clone());
+                let mut modified_locally = false;
+                if target_path.exists() {
+                    let existing_hash = hash_file(&target_path).unwrap_or_default();
+                    if let Some(pristine_hash) = previous_hashes.get(&rel_str) {
+                        if &existing_hash != pristine_hash {
+                            modified_locally = true;
+                        }
+                    } else if existing_hash != new_hash {
+                        modified_locally = true;
+                    }
+                }
+                if modified_locally {
+                    let stash_dest = update_backup_root.join(rel_path);
+                    copy_or_replace_file(&staged_path, &stash_dest)?;
+                    update_backups.push(stash_dest);
+                    installed_files.push(target_path);
+                } else {
+                    copy_or_replace_file(&staged_path, &target_path)?;
+                    installed_files.push(target_path);
+                }
+            } else {
+                copy_or_replace_file(&staged_path, &target_path)?;
+                installed_files.push(target_path);
+            }
+            if let Some(pb) = pb {
+                pb.inc(1);
+            }
+        }
+    }
     Ok(())
 }
 
 pub fn install_package_with_backups(
-    path: &Path,
+    package_path: &Path,
     install_root: &Path,
-    backups_list: &[String],
+    backups: &[String],
     previous_hashes: &HashMap<String, String>,
     update_backup_root: &Path,
     pb: Option<&ProgressBar>,
 ) -> Result<BackupsAwareInstall> {
-    let files = list_package_files(path)?;
-    let total = files.len() as u64;
-    if let Some(pb) = pb {
-        pb.set_length(total);
-        pb.set_position(0);
-    }
-    let reader = open_package_reader(path)?;
+    let conf = Config::load();
+    let tmp_base = Config::tmp_install_dir(&conf);
+    let pid = std::process::id();
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let tmp_dir = tmp_base.join(format!("extract_{}_{}", pid, timestamp));
+    fs::create_dir_all(&tmp_dir)?;
+    let _guard = TempDirGuard(&tmp_dir);
+    let reader = open_package_reader(package_path)?;
     let mut archive = Archive::new(reader);
-    let mut installed_files = Vec::new();
-    let mut backups_hashes = HashMap::new();
-    let mut update_backups = Vec::new();
-    let mut file_count = 0u64;
+    let backup_set: HashMap<String, String> = backups
+        .iter()
+        .map(|b| (b.trim_start_matches('/').replace('\\', "/"), b.clone()))
+        .collect();
     for entry in archive.entries()? {
         let mut entry = entry?;
         let entry_path = sanitize_entry_path(&entry.path()?)?;
-        if is_package_metadata_file(&entry_path) {
+        if entry_path == Path::new(".PKGINFO") || entry_path == Path::new(".INSTALL") || entry_path == Path::new(".BUILDINFO") {
             continue;
         }
-        let dest_path = install_root.join(&entry_path);
-        if entry.header().entry_type() == EntryType::Directory {
-            fs::create_dir_all(&dest_path)?;
-            continue;
-        }
+        let dest_path = tmp_dir.join(&entry_path);
         if let Some(parent) = dest_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let entry_key = entry_path.to_string_lossy().replace('\\', "/");
-        let is_backups = backups_list.iter().any(|b| b == &entry_key);
-        match entry.header().entry_type() {
-            EntryType::Regular => {
-                let mut buf = Vec::new();
-                std::io::copy(&mut entry, &mut buf)?;
-                let mode = entry.header().mode().ok();
-                if is_backups {
-                    let new_hash = sha256_bytes(&buf);
-                    let existing_hash = if dest_path.exists() {
-                        fs::read(&dest_path).ok().map(|d| sha256_bytes(&d))
-                    } else {
-                        None
-                    };
-                    let pristine_hash = previous_hashes.get(&entry_key);
-                    let user_modified = match (&existing_hash, pristine_hash) {
-                        (Some(current), Some(pristine)) => current != pristine,
-                        (Some(current), None) => current != &new_hash,
-                        (None, _) => false,
-                    };
-                    if user_modified {
-                        let backup_path = save_update_backup(update_backup_root, &entry_path, &buf, mode)
-                            .with_context(|| format!("failed to stash new version of {}", dest_path.display()))?;
-                        update_backups.push(backup_path);
-                        installed_files.push(dest_path.clone());
-                    } else {
-                        write_atomic(&dest_path, &buf, mode)?;
-                        installed_files.push(dest_path.clone());
-                    }
-                    backups_hashes.insert(entry_key.clone(), new_hash);
-                } else {
-                    write_atomic(&dest_path, &buf, mode)?;
-                    installed_files.push(dest_path);
-                }
-            }
-            EntryType::Symlink => {
-                let target_name = entry
-                    .link_name()
-                    .context("Missing symlink target")?
-                    .context("Invalid symlink target")?;
-                if dest_path.exists() {
-                    fs::remove_file(&dest_path).ok();
-                }
-                symlink(target_name, &dest_path)?;
-                installed_files.push(dest_path);
-            }
-            EntryType::Link => {
-                // A tar hard link's "link_name" is the path of another entry
-                // within this same archive (archive-root-relative, just
-                // like a regular file path), NOT a symlink-style path
-                // relative to dest_path's own directory. Treating it as a
-                // symlink target (as a plain "symlink()" call would) produces
-                // a dangling symlink, since that raw path is never resolved
-                // against install_root. Packages with many duplicate binary
-                // blobs (linux-firmware being the classic case) rely heavily
-                // on hard links, so getting this wrong silently corrupts a
-                // large fraction of such a package while still reporting
-                // "installed".
-                if let Some(target_name) = entry.link_name()? {
-                    let target_rel = sanitize_entry_path(&target_name)?;
-                    let target_path = install_root.join(&target_rel);
-                    if dest_path.exists() {
-                        fs::remove_file(&dest_path).ok();
-                    }
-                    // Tar guarantees the linked-to file was already emitted
-                    // earlier in the stream, so it should already be on disk.
-                    match fs::hard_link(&target_path, &dest_path) {
-                        Ok(()) => {}
-                        Err(_) => {
-                            // Fall back to a plain copy if hard-linking isn't
-                            // possible (e.g. target not yet extracted due to
-                            // unusual archive ordering, or install_root spans
-                            // multiple filesystems), the file still ends up
-                            // with correct content just without the
-                            // deduplication a hard link would give.
-                            let data = fs::read(&target_path).with_context(|| {
-                                format!(
-                                    "hard link target {} (for {}) not found",
-                                    target_path.display(),
-                                    entry_path.display()
-                                )
-                            })?;
-                            fs::write(&dest_path, &data)?;
-                        }
-                    }
-                    installed_files.push(dest_path);
-                }
-            }
-            _ => {}
-        }
-        file_count += 1;
-        if let Some(pb) = pb {
-            pb.set_position(file_count);
-        }
+        entry.unpack(&dest_path)?;
     }
+    let mut installed_files = Vec::new();
+    let mut backups_hashes = HashMap::new();
+    let mut update_backups = Vec::new();
+    process_staged_entries(
+        &tmp_dir,
+        &tmp_dir,
+        install_root,
+        &backup_set,
+        previous_hashes,
+        update_backup_root,
+        &mut installed_files,
+        &mut backups_hashes,
+        &mut update_backups,
+        pb,
+    )?;
     Ok(BackupsAwareInstall {
         installed_files,
         backups_hashes,
         update_backups,
     })
-}
-
-fn save_update_backup(update_backup_root: &Path, entry_path: &Path, data: &[u8], mode: Option<u32>) -> Result<PathBuf> {
-    let dest = update_backup_root.join(entry_path);
-    if let Some(parent) = dest.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    write_atomic(&dest, data, mode)?;
-    Ok(dest)
 }
 
 fn open_package_reader(path: &Path) -> Result<Box<dyn Read>> {

@@ -148,27 +148,23 @@ impl Config {
             self.extra_mirrors = mirrorlist.extra;
         }
     }
-    // Where downloaded package archives are staged before install, e.g.
-    // "/var/cache/lkpm/download/<pkg>.tar.zst".
     pub fn download_dir(&self) -> PathBuf {
         let dir = self.cache_path.join("download");
         let _ = Config::ensure_dir(&dir);
         dir
     }
-    // Where each package ".INSTALL" script is staged while its hooks
-    // run, e.g. "/var/cache/lkpm/install/<pkg>-<hook>-<pid>.sh". Kept
-    // separate from "download_dir" so the two never collide.
     pub fn install_script_dir(&self) -> PathBuf {
-        let dir = self.cache_path.join("install");
+        let dir = self.cache_path.join("tmp-script");
         let _ = Config::ensure_dir(&dir);
         dir
     }
-    // Where an upgrade pre-overwrite file contents are staged, e.g.
-    // "/var/cache/lkpm/pkg-backup/<pkg>-<old-version>/....". Lets a rolled
-    // back upgrade restore the exact previous file content instead of
-    // just deleting the new files and leaving the package uninstalled.
     pub fn pkg_backup_dir(&self) -> PathBuf {
         let dir = self.cache_path.join("pkg-backup");
+        let _ = Config::ensure_dir(&dir);
+        dir
+    }
+    pub fn tmp_install_dir(&self) -> PathBuf {
+        let dir = self.cache_path.join("tmp-install");
         let _ = Config::ensure_dir(&dir);
         dir
     }

@@ -50,7 +50,10 @@ package() {
     fi
     install -dm 700 "${pkgdir}/var/db/lkpm"
     chmod 700 "${pkgdir}/var/db/lkpm"
-    chown root:root "${pkgdir}/usr/bin/lkpm"
+    chown root:root "${pkgdir}/usr/db/lkpm"
+    install -dm 700 "${pkgdir}/var/cache/lkpm"
+    chmod 700 "${pkgdir}/var/cache/lkpm"
+    chown root:root "${pkgdir}/usr/cache/lkpm"
     install -dm 755 "${pkgdir}/etc/lkpm.d/backup"
     chmod 755 "${pkgdir}/etc/lkpm.d/backup"
     chown root:root "${pkgdir}/etc/lkpm.d/backup"
