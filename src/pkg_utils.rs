@@ -29,7 +29,7 @@ pub struct PackageMetadata {
 pub struct BackupsAwareInstall {
     pub installed_files: Vec<PathBuf>,
     pub backups_hashes: HashMap<String, String>,
-    pub preserved_as_new: Vec<PathBuf>,
+    pub update_backups: Vec<PathBuf>,
 }
 
 pub fn read_package_metadata(path: &Path) -> Result<PackageMetadata> {
@@ -151,7 +151,8 @@ pub fn install_package(
     install_root: &Path,
     pb: Option<&ProgressBar>,
 ) -> Result<Vec<PathBuf>> {
-    let result = install_package_with_backups(path, install_root, &[], &HashMap::new(), pb)?;
+    let update_backup_root = install_root.join("etc/lkpm.d/update-backup");
+    let result = install_package_with_backups(path, install_root, &[], &HashMap::new(), &update_backup_root, pb)?;
     Ok(result.installed_files)
 }
 
@@ -183,6 +184,7 @@ pub fn install_package_with_backups(
     install_root: &Path,
     backups_list: &[String],
     previous_hashes: &HashMap<String, String>,
+    update_backup_root: &Path,
     pb: Option<&ProgressBar>,
 ) -> Result<BackupsAwareInstall> {
     let files = list_package_files(path)?;
@@ -195,7 +197,7 @@ pub fn install_package_with_backups(
     let mut archive = Archive::new(reader);
     let mut installed_files = Vec::new();
     let mut backups_hashes = HashMap::new();
-    let mut preserved_as_new = Vec::new();
+    let mut update_backups = Vec::new();
     let mut file_count = 0u64;
     for entry in archive.entries()? {
         let mut entry = entry?;
@@ -232,16 +234,9 @@ pub fn install_package_with_backups(
                         (None, _) => false,
                     };
                     if user_modified {
-                        let new_path_name = format!(
-                            "{}.lkpmnew",
-                            dest_path.file_name().unwrap_or_default().to_string_lossy()
-                        );
-                        let new_path = dest_path.with_file_name(new_path_name);
-                        fs::write(&new_path, &buf)?;
-                        if let Some(mode) = mode {
-                            fs::set_permissions(&new_path, fs::Permissions::from_mode(mode)).ok();
-                        }
-                        preserved_as_new.push(new_path);
+                        let backup_path = save_update_backup(update_backup_root, &entry_path, &buf, mode)
+                            .with_context(|| format!("failed to stash new version of {}", dest_path.display()))?;
+                        update_backups.push(backup_path);
                         installed_files.push(dest_path.clone());
                     } else {
                         write_atomic(&dest_path, &buf, mode)?;
@@ -316,8 +311,17 @@ pub fn install_package_with_backups(
     Ok(BackupsAwareInstall {
         installed_files,
         backups_hashes,
-        preserved_as_new,
+        update_backups,
     })
+}
+
+fn save_update_backup(update_backup_root: &Path, entry_path: &Path, data: &[u8], mode: Option<u32>) -> Result<PathBuf> {
+    let dest = update_backup_root.join(entry_path);
+    if let Some(parent) = dest.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    write_atomic(&dest, data, mode)?;
+    Ok(dest)
 }
 
 fn open_package_reader(path: &Path) -> Result<Box<dyn Read>> {

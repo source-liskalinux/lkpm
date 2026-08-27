@@ -80,7 +80,7 @@ struct ExtractedPackage {
     install_script: Option<String>,
     previous_version: Option<String>,
     previous_record: Option<InstalledPackage>,
-    preserved_as_new: Vec<PathBuf>,
+    update_backups: Vec<PathBuf>,
     backup_dir: Option<PathBuf>,
 }
 
@@ -130,15 +130,19 @@ fn extract_package(
         Some(prev) => Some(backup_previous_files(cfg, prev)?),
         None => None,
     };
-    let result =
-        pkg::install_package_with_backups(path, &cfg.install_root, &metadata.backups, &previous_hashes, None)
-            .map_err(LkpmError::from)?;
-    for new_file in result.preserved_as_new.iter() {
-        ui::warning(&format!(
-            "{} was modified locally! New package version saved to {}.",
-            new_file.with_extension("").display(),
-            new_file.display()
-        ));
+    let update_backup_root = cfg.update_backup_dir();
+    let result = pkg::install_package_with_backups(
+        path,
+        &cfg.install_root,
+        &metadata.backups,
+        &previous_hashes,
+        &update_backup_root,
+        None,
+    )
+    .map_err(LkpmError::from)?;
+    for backup_file in result.update_backups.iter() {
+        ui::warning(&format!("{} was modified locally! The existing file was left untouched.", metadata.name));
+        ui::info(&format!("The new package version for {} was saved to {} for you to review.", metadata.name, backup_file.display()));
     }
     let backups_paths: Vec<PathBuf> = metadata
         .backups
@@ -153,7 +157,7 @@ fn extract_package(
         install_script,
         previous_version: previous.as_ref().map(|p| p.version.clone()),
         previous_record: previous,
-        preserved_as_new: result.preserved_as_new,
+        update_backups: result.update_backups,
         backup_dir,
     })
 }
@@ -271,19 +275,22 @@ fn rollback_extracted_package(cfg: &Config, db: &mut Database, extracted: &Extra
         "Rolling back {} ({})....",
         extracted.metadata.name, extracted.metadata.version
     ));
-    for file in extracted.preserved_as_new.iter() {
-        if file.exists() {
-            let _ = fs::remove_file(file);
+    let update_backup_root = cfg.update_backup_dir();
+    let mut untouched: HashSet<PathBuf> = HashSet::new();
+    for stash in extracted.update_backups.iter() {
+        if let Ok(rel) = stash.strip_prefix(&update_backup_root) {
+            untouched.insert(cfg.install_root.join(rel));
         }
+        let _ = fs::remove_file(stash);
     }
     match (&extracted.backup_dir, &extracted.previous_record) {
         (Some(backup_root), Some(prev)) => {
-            // Upgrade: restore every backed-up file to its previous content.
             restore_backed_up_files(cfg, backup_root, prev);
-            // Remove any file this upgrade introduced that the old version
-            // didn't have, it has nothing to be restored to.
             let prev_files: HashSet<&PathBuf> = prev.files.iter().collect();
             for file in extracted.installed_files.iter() {
+                if untouched.contains(file) {
+                    continue;
+                }
                 if !prev_files.contains(file) && file.exists() {
                     if let Err(e) = fs::remove_file(file) {
                         ui::warning(&format!(
@@ -311,10 +318,10 @@ fn rollback_extracted_package(cfg: &Config, db: &mut Database, extracted: &Extra
             ));
         }
         (None, Some(prev)) => {
-            // Shouldn't normally happen (extract_package always backs up
-            // when there's a previous version), fall back to best-effort:
-            // remove the new files, but content can't be restored.
             for file in extracted.installed_files.iter() {
+                if untouched.contains(file) {
+                    continue;
+                }
                 if file.exists() {
                     let _ = fs::remove_file(file);
                 }
@@ -331,8 +338,10 @@ fn rollback_extracted_package(cfg: &Config, db: &mut Database, extracted: &Extra
             ));
         }
         (_, None) => {
-            // Fresh install: nothing existed before, so fully undo it.
             for file in extracted.installed_files.iter() {
+                if untouched.contains(file) {
+                    continue;
+                }
                 if file.exists() {
                     if let Err(e) = fs::remove_file(file) {
                         ui::warning(&format!(

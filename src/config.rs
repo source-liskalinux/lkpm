@@ -39,6 +39,21 @@ impl Config {
         }
         Ok(())
     }
+    fn ensure_backup_dir(dir: &PathBuf) -> Result<(), LkpmError> {
+        if !dir.exists() {
+            let mut builder = fs::DirBuilder::new();
+            builder.recursive(true);
+            #[cfg(unix)]
+            builder.mode(0o755);
+            builder.create(dir).map_err(LkpmError::Io)?;
+        }
+        #[cfg(unix)]
+        {
+            fs::set_permissions(dir, fs::Permissions::from_mode(0o755))
+            .map_err(LkpmError::Io)?;
+        }
+        Ok(())
+    }
     pub fn load() -> Self {
         let mut cfg = Self::defaults();
         if cfg!(test) {
@@ -155,6 +170,11 @@ impl Config {
     pub fn pkg_backup_dir(&self) -> PathBuf {
         let dir = self.cache_path.join("pkg-backup");
         let _ = Config::ensure_dir(&dir);
+        dir
+    }
+    pub fn update_backup_dir(&self) -> PathBuf {
+        let dir = self.install_root.join("etc/lkpm.d/update-backup");
+        let _ = Config::ensure_backup_dir(&dir);
         dir
     }
 }
