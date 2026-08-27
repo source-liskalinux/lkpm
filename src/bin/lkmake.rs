@@ -434,7 +434,7 @@ fn main() {
     }
     let srcdir = "src";
     let pkgdir = "pkg";
-    let projectdir = env::var("HOME").unwrap();
+    let projectdir = env::current_dir()?;
     let fakeroot_state = fakeroot_state_path();
     let _ = download_sources(srcdir);
     let ok = check_integrity(srcdir);
