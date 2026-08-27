@@ -173,7 +173,7 @@ impl Config {
         dir
     }
     pub fn update_backup_dir(&self) -> PathBuf {
-        let dir = self.install_root.join("etc/lkpm.d/update-backup");
+        let dir = self.install_root.join("etc/lkpm.d/backup");
         let _ = Config::ensure_backup_dir(&dir);
         dir
     }

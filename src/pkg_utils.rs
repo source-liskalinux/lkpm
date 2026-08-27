@@ -151,7 +151,7 @@ pub fn install_package(
     install_root: &Path,
     pb: Option<&ProgressBar>,
 ) -> Result<Vec<PathBuf>> {
-    let update_backup_root = install_root.join("etc/lkpm.d/update-backup");
+    let update_backup_root = install_root.join("etc/lkpm.d/backup");
     let result = install_package_with_backups(path, install_root, &[], &HashMap::new(), &update_backup_root, pb)?;
     Ok(result.installed_files)
 }
