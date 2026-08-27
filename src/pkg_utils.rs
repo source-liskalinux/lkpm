@@ -177,6 +177,20 @@ fn hash_file(path: &Path) -> Result<String> {
     Ok(hex::encode(hasher.finalize()))
 }
 
+fn unpack_entry_safely<R: Read>(entry: &mut tar::Entry<R>, dst_root: &Path) -> Result<()> {
+    let entry_path = entry.path()?;
+    let target = dst_root.join(&entry_path);
+    if entry.header().entry_type().is_dir() {
+        if let Ok(meta) = fs::symlink_metadata(&target) {
+            if meta.file_type().is_symlink() {
+                return Ok(());
+            }
+        }
+    }
+    entry.unpack_in(dst_root)?;
+    Ok(())
+}
+
 pub fn install_package_with_backups(
     package_path: &Path,
     install_root: &Path,
@@ -200,7 +214,10 @@ pub fn install_package_with_backups(
         let reader = open_package_reader(package_path)?;
         let mut archive = Archive::new(reader);
         archive.set_preserve_permissions(true);
-        archive.unpack(tmp_path)?;
+        for entry in archive.entries()? {
+            let mut entry = entry?;
+            unpack_entry_safely(&mut entry, tmp_path)?;
+        }
     }
     let backup_set: HashMap<String, String> = backups
         .iter()
@@ -246,7 +263,10 @@ pub fn install_package_with_backups(
         let reader = open_package_reader(package_path)?;
         let mut archive = Archive::new(reader);
         archive.set_preserve_permissions(true);
-        archive.unpack(install_root)?;
+        for entry in archive.entries()? {
+            let mut entry = entry?;
+            unpack_entry_safely(&mut entry, install_root)?;
+        }
     }
     for (target_path, stash_dest) in modified_backups {
         let _ = fs::copy(&stash_dest, &target_path);
