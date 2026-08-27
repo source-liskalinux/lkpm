@@ -177,17 +177,55 @@ fn hash_file(path: &Path) -> Result<String> {
     Ok(hex::encode(hasher.finalize()))
 }
 
+pub fn resolve_symlink_path(install_root: &Path, rel_path: &Path) -> PathBuf {
+    let mut current = install_root.to_path_buf();
+    let components: Vec<_> = rel_path.components().collect();
+    for (i, comp) in components.iter().enumerate() {
+        match comp {
+            Component::Normal(name) => {
+                current.push(name);
+                let is_last = i == components.len() - 1;
+                if !is_last || current.is_dir() {
+                    if let Ok(meta) = fs::symlink_metadata(&current) {
+                        if meta.file_type().is_symlink() {
+                            if let Ok(target) = fs::read_link(&current) {
+                                let parent = current.parent().unwrap_or(install_root);
+                                let resolved = if target.is_absolute() {
+                                    install_root.join(target.strip_prefix("/").unwrap_or(&target))
+                                } else {
+                                    parent.join(target)
+                                };
+                                current = resolved;
+                            }
+                        }
+                    }
+                }
+            }
+            _ => continue,
+        }
+    }
+    current
+        .strip_prefix(install_root)
+        .unwrap_or(&current)
+        .to_path_buf()
+}
+
 fn unpack_entry_safely<R: Read>(entry: &mut tar::Entry<R>, dst_root: &Path) -> Result<()> {
-    let entry_path = entry.path()?;
-    let target = dst_root.join(&entry_path);
+    let raw_entry_path = entry.path()?;
+    let entry_path = sanitize_entry_path(&raw_entry_path)?;
+    let resolved_rel_path = resolve_symlink_path(dst_root, &entry_path);
+    let target = dst_root.join(&resolved_rel_path);
     if entry.header().entry_type().is_dir() {
         if let Ok(meta) = fs::symlink_metadata(&target) {
-            if meta.file_type().is_symlink() {
+            if meta.file_type().is_symlink() || meta.is_dir() {
                 return Ok(());
             }
         }
     }
-    entry.unpack_in(dst_root)?;
+    if let Some(parent) = target.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    entry.unpack(&target)?;
     Ok(())
 }
 
@@ -235,8 +273,9 @@ pub fn install_package_with_backups(
         if is_package_metadata_file(&entry_path) {
             continue;
         }
-        let rel_str = entry_path.to_string_lossy().replace('\\', "/");
-        let target_path = install_root.join(&entry_path);
+        let resolved_path = resolve_symlink_path(install_root, &entry_path);
+        let rel_str = resolved_path.to_string_lossy().replace('\\', "/");
+        let target_path = install_root.join(&resolved_path);
         installed_files.push(target_path.clone());
         if backup_set.contains_key(&rel_str) && target_path.exists() && target_path.is_file() {
             let existing_hash = hash_file(&target_path).unwrap_or_default();

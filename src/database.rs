@@ -61,7 +61,7 @@ impl Database {
     }
     #[cfg(unix)]
     fn ensure_db_file_mode(db_file: &PathBuf) -> Result<(), LkpmError> {
-        fs::set_permissions(db_file, fs::Permissions::from_mode(0o400)).map_err(LkpmError::Io)
+        fs::set_permissions(db_file, fs::Permissions::from_mode(0o600)).map_err(LkpmError::Io)
     }
     #[cfg(not(unix))]
     fn ensure_db_file_mode(_db_file: &PathBuf) -> Result<(), LkpmError> {
