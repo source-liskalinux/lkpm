@@ -12,8 +12,6 @@ use xz2::read::XzDecoder;
 use zstd::Decoder;
 use crate::config::Config;
 use crate::repo;
-#[cfg(unix)]
-use std::os::unix::fs::{lchown, symlink, MetadataExt};
 
 #[derive(Debug, Clone)]
 pub struct PackageMetadata {
@@ -179,39 +177,6 @@ fn hash_file(path: &Path) -> Result<String> {
     Ok(hex::encode(hasher.finalize()))
 }
 
-fn copy_or_replace_file(src: &Path, dst: &Path) -> Result<()> {
-    let meta = fs::symlink_metadata(src)?;
-    if let Some(parent) = dst.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    let file_type = meta.file_type();
-    if dst.exists() || fs::symlink_metadata(dst).is_ok() {
-        if dst.is_dir() && !file_type.is_dir() {
-            let _ = fs::remove_dir_all(dst);
-        } else if !file_type.is_dir() {
-            let _ = fs::remove_file(dst);
-        }
-    }
-    if file_type.is_dir() {
-        fs::create_dir_all(dst)?;
-    } else if file_type.is_symlink() {
-        let target = fs::read_link(src)?;
-        symlink(&target, dst)?;
-    } else {
-        if fs::rename(src, dst).is_err() {
-            fs::copy(src, dst)?;
-        }
-    }
-    #[cfg(unix)]
-    {
-        if !file_type.is_symlink() {
-            let _ = fs::set_permissions(dst, meta.permissions());
-        }
-        let _ = lchown(dst, Some(meta.uid()), Some(meta.gid()));
-    }
-    Ok(())
-}
-
 pub fn install_package_with_backups(
     package_path: &Path,
     install_root: &Path,
@@ -234,10 +199,9 @@ pub fn install_package_with_backups(
     {
         let reader = open_package_reader(package_path)?;
         let mut archive = Archive::new(reader);
+        archive.set_preserve_permissions(true);
         archive.unpack(tmp_path)?;
     }
-    let reader = open_package_reader(package_path)?;
-    let mut archive = Archive::new(reader);
     let backup_set: HashMap<String, String> = backups
         .iter()
         .map(|b| (b.trim_start_matches('/').replace('\\', "/"), b.clone()))
@@ -245,6 +209,9 @@ pub fn install_package_with_backups(
     let mut installed_files = Vec::new();
     let mut backups_hashes = HashMap::new();
     let mut update_backups = Vec::new();
+    let mut modified_backups = Vec::new();
+    let reader = open_package_reader(package_path)?;
+    let mut archive = Archive::new(reader);
     for entry in archive.entries()? {
         let entry = entry?;
         let entry_path = sanitize_entry_path(&entry.path()?)?;
@@ -253,23 +220,8 @@ pub fn install_package_with_backups(
         }
         let rel_str = entry_path.to_string_lossy().replace('\\', "/");
         let target_path = install_root.join(&entry_path);
-        let staged_path = tmp_path.join(&entry_path);
-        let is_backup = backup_set.contains_key(&rel_str);
-        if !staged_path.exists() && fs::symlink_metadata(&staged_path).is_err() {
-            continue;
-        }
-        if staged_path.is_dir() {
-            let existed = target_path.exists();
-            fs::create_dir_all(&target_path)?;
-            if !existed {
-                installed_files.push(target_path);
-            }
-            if let Some(pb) = pb {
-                pb.inc(1);
-            }
-            continue;
-        }
-        if is_backup && target_path.exists() && target_path.is_file() {
+        installed_files.push(target_path.clone());
+        if backup_set.contains_key(&rel_str) && target_path.exists() && target_path.is_file() {
             let existing_hash = hash_file(&target_path).unwrap_or_default();
             let pristine_hash = previous_hashes.get(&rel_str);
             let modified = match pristine_hash {
@@ -278,24 +230,33 @@ pub fn install_package_with_backups(
             };
             if modified {
                 let stash_dest = update_backup_root.join(&entry_path);
-                copy_or_replace_file(&target_path, &stash_dest)?;
-                update_backups.push(stash_dest);
-                installed_files.push(target_path);
-                if let Some(pb) = pb {
-                    pb.inc(1);
+                if let Some(parent) = stash_dest.parent() {
+                    let _ = fs::create_dir_all(parent);
                 }
-                continue;
-            }
-        }
-        copy_or_replace_file(&staged_path, &target_path)?;
-        installed_files.push(target_path.clone());
-        if is_backup && target_path.exists() && target_path.is_file() {
-            if let Ok(new_hash) = hash_file(&target_path) {
-                backups_hashes.insert(rel_str, new_hash);
+                let _ = fs::copy(&target_path, &stash_dest);
+                update_backups.push(stash_dest.clone());
+                modified_backups.push((target_path.clone(), stash_dest));
             }
         }
         if let Some(pb) = pb {
             pb.inc(1);
+        }
+    }
+    {
+        let reader = open_package_reader(package_path)?;
+        let mut archive = Archive::new(reader);
+        archive.set_preserve_permissions(true);
+        archive.unpack(install_root)?;
+    }
+    for (target_path, stash_dest) in modified_backups {
+        let _ = fs::copy(&stash_dest, &target_path);
+    }
+    for backup_rel in backup_set.keys() {
+        let target_path = install_root.join(backup_rel);
+        if target_path.exists() && target_path.is_file() {
+            if let Ok(new_hash) = hash_file(&target_path) {
+                backups_hashes.insert(backup_rel.clone(), new_hash);
+            }
         }
     }
     Ok(BackupsAwareInstall {

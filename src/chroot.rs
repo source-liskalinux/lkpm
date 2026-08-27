@@ -285,14 +285,12 @@ fn fork_exec_in_chroot(target_dir: &Path, shell_bin: &str, command: &str) -> Res
         }
         break;
     }
-    unsafe {
-        if libc::WIFEXITED(status) {
-            Ok(libc::WEXITSTATUS(status))
-        } else if libc::WIFSIGNALED(status) {
-            Ok(128 + libc::WTERMSIG(status))
-        } else {
-            Ok(1)
-        }
+    if libc::WIFEXITED(status) {
+        Ok(libc::WEXITSTATUS(status))
+    } else if libc::WIFSIGNALED(status) {
+        Ok(128 + libc::WTERMSIG(status))
+    } else {
+        Ok(1)
     }
 }
 
