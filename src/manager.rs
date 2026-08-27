@@ -427,18 +427,28 @@ struct PreparedInstall {
 }
 
 const BOOTSTRAP_ESSENTIALS: &[&str] = &[
-    "filesystem", "iana-etc", "glibc", "busybox", "bash", "coreutils", "util-linux", "kmod",
+    "iana-etc-", "glibc-", "busybox-", "bash-", "coreutils-", "util-linux-", "kmod-",
 ];
 
 fn is_bootstrap_essential(name: &str) -> bool {
     BOOTSTRAP_ESSENTIALS.contains(&name)
 }
 
+fn priority_score(name: &str) -> u8 {
+    if name.contains("filesystem-") {
+        0
+    } else if is_bootstrap_essential(name) {
+        1
+    } else {
+        2
+    }
+}
+
 fn pick_next(ready: &mut Vec<String>) -> Option<String> {
     let idx = ready
         .iter()
         .enumerate()
-        .min_by_key(|(_, name)| (!is_bootstrap_essential(name), name.as_str()))
+        .min_by_key(|(_, name)| (!priority_score(name), name.as_str()))
         .map(|(i, _)| i)?;
     Some(ready.remove(idx))
 }
@@ -826,6 +836,7 @@ fn install_local_packages(
     let mut pending: Vec<PendingLocal> = Vec::new();
     let mut results: Vec<ui::PackageSummary> = Vec::new();
     ui::info(&format!("{} {} {}", "Installing".bright_cyan(), targets.len(), "package(s)....".bright_cyan()));
+    targets.sort_by_key(|(_, metadata)| priority_score(&metadata.name));
     for (path, metadata) in targets.into_iter() {
         ui::info(&format!(
             "➔ Installing {} ({}) from {}....",
@@ -1056,6 +1067,7 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
                 extracted: ExtractedPackage,
             }
             let mut pending: Vec<PendingRemote> = Vec::new();
+            prepared.sort_by_key(|item| priority_score(&item.metadata.name));
             for prepared in prepared.into_iter() {
                 let target = prepared.target.clone();
                 let path = prepared.path.clone();
@@ -1386,6 +1398,7 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
                 extracted: ExtractedPackage,
             }
             let mut pending: Vec<PendingUpdate> = Vec::new();
+            prepared_updates.sort_by_key(|(_, _, metadata, _, _)| priority_score(&metadata.name));
             for (target, path, metadata, size, checksum) in prepared_updates.into_iter() {
                 ui::info(&format!(
                     "➔ Updating {} ({} ➔ {})...",
