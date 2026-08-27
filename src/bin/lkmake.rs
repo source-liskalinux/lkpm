@@ -434,7 +434,9 @@ fn main() {
     }
     let srcdir = "src";
     let pkgdir = "pkg";
-    let projectdir = env::current_dir()?;
+    let currentdir = env::current_dir();
+    let binding = currentdir.expect("can't detecting current directory!");
+    let projectdir = binding.to_string_lossy();
     let fakeroot_state = fakeroot_state_path();
     let _ = download_sources(srcdir);
     let ok = check_integrity(srcdir);
