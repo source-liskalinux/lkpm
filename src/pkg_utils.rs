@@ -194,76 +194,6 @@ fn copy_or_replace_file(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
-fn process_staged_entries(
-    tmp_dir: &Path,
-    current_dir: &Path,
-    install_root: &Path,
-    backup_set: &HashMap<String, String>,
-    previous_hashes: &HashMap<String, String>,
-    update_backup_root: &Path,
-    installed_files: &mut Vec<PathBuf>,
-    backups_hashes: &mut HashMap<String, String>,
-    update_backups: &mut Vec<PathBuf>,
-    pb: Option<&ProgressBar>,
-) -> Result<()> {
-    for entry in fs::read_dir(current_dir)? {
-        let entry = entry?;
-        let staged_path = entry.path();
-        let rel_path = staged_path.strip_prefix(tmp_dir)?;
-        let rel_str = rel_path.to_string_lossy().replace('\\', "/");
-        let target_path = install_root.join(rel_path);
-        let file_type = entry.file_type()?;
-        if file_type.is_dir() {
-            fs::create_dir_all(&target_path)?;
-            process_staged_entries(
-                tmp_dir,
-                &staged_path,
-                install_root,
-                backup_set,
-                previous_hashes,
-                update_backup_root,
-                installed_files,
-                backups_hashes,
-                update_backups,
-                pb,
-            )?;
-        } else {
-            let is_backup = backup_set.contains_key(&rel_str);
-            if is_backup {
-                let new_hash = hash_file(&staged_path)?;
-                backups_hashes.insert(rel_str.clone(), new_hash.clone());
-                let mut modified_locally = false;
-                if target_path.exists() {
-                    let existing_hash = hash_file(&target_path).unwrap_or_default();
-                    if let Some(pristine_hash) = previous_hashes.get(&rel_str) {
-                        if &existing_hash != pristine_hash {
-                            modified_locally = true;
-                        }
-                    } else if existing_hash != new_hash {
-                        modified_locally = true;
-                    }
-                }
-                if modified_locally {
-                    let stash_dest = update_backup_root.join(rel_path);
-                    copy_or_replace_file(&staged_path, &stash_dest)?;
-                    update_backups.push(stash_dest);
-                    installed_files.push(target_path);
-                } else {
-                    copy_or_replace_file(&staged_path, &target_path)?;
-                    installed_files.push(target_path);
-                }
-            } else {
-                copy_or_replace_file(&staged_path, &target_path)?;
-                installed_files.push(target_path);
-            }
-            if let Some(pb) = pb {
-                pb.inc(1);
-            }
-        }
-    }
-    Ok(())
-}
-
 pub fn install_package_with_backups(
     package_path: &Path,
     install_root: &Path,
@@ -272,6 +202,8 @@ pub fn install_package_with_backups(
     update_backup_root: &Path,
     pb: Option<&ProgressBar>,
 ) -> Result<BackupsAwareInstall> {
+    let reader = open_package_reader(package_path)?;
+    let mut archive = Archive::new(reader);
     let conf = Config::load();
     let tmp_base = Config::tmp_install_dir(&conf);
     let pid = std::process::id();
@@ -279,42 +211,59 @@ pub fn install_package_with_backups(
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos();
-    let tmp_dir = tmp_base.join(format!("extract_{}_{}", pid, timestamp));
+    let tmp_dir = tmp_base.join(format!("extract-{}-{}", pid, timestamp));
     fs::create_dir_all(&tmp_dir)?;
     let _guard = TempDirGuard(&tmp_dir);
-    let reader = open_package_reader(package_path)?;
-    let mut archive = Archive::new(reader);
+    let tmp_path = tmp_dir.as_path();
     let backup_set: HashMap<String, String> = backups
         .iter()
         .map(|b| (b.trim_start_matches('/').replace('\\', "/"), b.clone()))
         .collect();
-    for entry in archive.entries()? {
-        let mut entry = entry?;
-        let entry_path = sanitize_entry_path(&entry.path()?)?;
-        if entry_path == Path::new(".PKGINFO") || entry_path == Path::new(".INSTALL") || entry_path == Path::new(".BUILDINFO") {
-            continue;
-        }
-        let dest_path = tmp_dir.join(&entry_path);
-        if let Some(parent) = dest_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        entry.unpack(&dest_path)?;
-    }
     let mut installed_files = Vec::new();
     let mut backups_hashes = HashMap::new();
     let mut update_backups = Vec::new();
-    process_staged_entries(
-        &tmp_dir,
-        &tmp_dir,
-        install_root,
-        &backup_set,
-        previous_hashes,
-        update_backup_root,
-        &mut installed_files,
-        &mut backups_hashes,
-        &mut update_backups,
-        pb,
-    )?;
+    for entry in archive.entries()? {
+        let mut entry = entry?;
+        let entry_path = sanitize_entry_path(&entry.path()?)?;
+        if is_package_metadata_file(&entry_path) {
+            continue;
+        }
+        let rel_str = entry_path.to_string_lossy().replace('\\', "/");
+        let target_path = install_root.join(&entry_path);
+        let staged_path = tmp_path.join(&entry_path);
+        let is_backup = backup_set.contains_key(&rel_str);
+        if !entry.unpack_in(tmp_path)? {
+            continue;
+        }
+        if is_backup && target_path.exists() {
+            let existing_hash = hash_file(&target_path).unwrap_or_default();
+            let pristine_hash = previous_hashes.get(&rel_str);
+            let modified = match pristine_hash {
+                Some(ph) => &existing_hash != ph,
+                None => true,
+            };
+            if modified {
+                let stash_dest = update_backup_root.join(&entry_path);
+                copy_or_replace_file(&target_path, &stash_dest)?;
+                update_backups.push(stash_dest);
+                installed_files.push(target_path);
+                if let Some(pb) = pb {
+                    pb.inc(1);
+                }
+                continue;
+            }
+        }
+        copy_or_replace_file(&staged_path, &target_path)?;
+        installed_files.push(target_path.clone());
+        if is_backup && target_path.exists() {
+            if let Ok(new_hash) = hash_file(&target_path) {
+                backups_hashes.insert(rel_str, new_hash);
+            }
+        }
+        if let Some(pb) = pb {
+            pb.inc(1);
+        }
+    }
     Ok(BackupsAwareInstall {
         installed_files,
         backups_hashes,
