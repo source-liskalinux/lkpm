@@ -45,11 +45,11 @@ impl Config {
         }
         if !dir.exists() {
             fs::create_dir(dir).map_err(LkpmError::Io)?;
-        }
-        #[cfg(unix)]
-        {
-            fs::set_permissions(dir, fs::Permissions::from_mode(0o755))
-                .map_err(LkpmError::Io)?;
+            #[cfg(unix)]
+            {
+                fs::set_permissions(dir, fs::Permissions::from_mode(0o755))
+                    .map_err(LkpmError::Io)?;
+            }
         }
         Ok(())
     }
