@@ -15,6 +15,7 @@ use std::fs;
 use std::env;
 use std::path::{Component, Path, PathBuf};
 use std::time::{Instant, Duration};
+use std::os::unix::fs::PermissionsExt;
 use colored::Colorize;
 
 const REFRESH_INTERVAL_SECS: u64 = 15 * 60;
@@ -698,9 +699,14 @@ fn is_metadata_stale(path: &PathBuf) -> bool {
 }
 
 fn touch_refresh_stamp(dir: &PathBuf) {
-    if fs::create_dir_all(dir).is_ok() {
+    if Config::ensure_private_dir(&dir).is_ok() {
         let stamp_path = dir.join("last-refresh");
-        let _ = fs::write(stamp_path, "");
+        let _ = fs::remove_file(&stamp_path);
+        let _ = fs::write(&stamp_path, "");
+        #[cfg(unix)]
+        {
+            let _ = fs::set_permissions(&stamp_path, fs::Permissions::from_mode(0o400)).map_err(LkpmError::Io);
+        }
     }
 }
 
