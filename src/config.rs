@@ -21,10 +21,11 @@ pub struct Config {
     pub db_path: PathBuf,
     pub cache_path: PathBuf,
     pub install_root: PathBuf,
+    pub log_path: PathBuf,
 }
 
 impl Config {
-    fn ensure_dir(dir: &PathBuf) -> Result<(), LkpmError> {
+    fn ensure_private_dir(dir: &PathBuf) -> Result<(), LkpmError> {
         if !dir.exists() {
             let mut builder = fs::DirBuilder::new();
             builder.recursive(true);
@@ -39,7 +40,7 @@ impl Config {
         }
         Ok(())
     }
-    fn ensure_backup_dir(dir: &PathBuf) -> Result<(), LkpmError> {
+    pub fn ensure_dir(dir: &PathBuf) -> Result<(), LkpmError> {
         if !dir.exists() {
             let mut builder = fs::DirBuilder::new();
             builder.recursive(true);
@@ -69,13 +70,14 @@ impl Config {
         Self {
             core_repos: Vec::new(),
             extra_mirrors: Vec::new(),
-            arch: Vec::<String>::new().into_iter().collect(),
+            arch: "x86_64".to_string(),
             blocked_packages: Vec::new(),
             no_update_packages: Vec::new(),
             parallel_operation: 5,
             db_path: PathBuf::from("/var/db/lkpm"),
             cache_path: PathBuf::from("/var/cache/lkpm"),
             install_root: PathBuf::from("/"),
+            log_path: PathBuf::from("/var/log/lkpm"),
         }
     }
     fn apply_system_mirrorlist(&mut self) {
@@ -102,7 +104,11 @@ impl Config {
         }   
         if let Ok(val) = globals.get::<String>("cache_path") {
             self.cache_path = PathBuf::from(val);
-            let _ = Config::ensure_dir(&self.cache_path);
+            let _ = Config::ensure_private_dir(&self.cache_path);
+        }
+        if let Ok(val) = globals.get::<String>("log_path") {
+            self.log_path = PathBuf::from(val);
+            let _ = Config::ensure_private_dir(&self.log_path);
         }
         if let Ok(val) = globals.get::<String>("arch") {
             self.arch = val;
@@ -121,9 +127,11 @@ impl Config {
             .unwrap_or_else(|_| DEFAULT_CONFIG.to_string());   
         let saved_cache = self.cache_path.clone();
         let saved_root = self.install_root.clone();
+        let saved_log_path = self.log_path.clone();
         self.apply_config_lua(&text);
         self.cache_path = saved_cache;
         self.install_root = saved_root;
+        self.log_path = saved_log_path;
     }
     pub fn reload_mirrorlist_for_root(&mut self) {
         let root_mirrorlist = self.install_root.join("etc/lkpm.d/mirrorlist");
@@ -150,27 +158,27 @@ impl Config {
     }
     pub fn download_dir(&self) -> PathBuf {
         let dir = self.cache_path.join("download");
-        let _ = Config::ensure_dir(&dir);
+        let _ = Config::ensure_private_dir(&dir);
         dir
     }
     pub fn install_script_dir(&self) -> PathBuf {
         let dir = self.cache_path.join("tmp-script");
-        let _ = Config::ensure_dir(&dir);
+        let _ = Config::ensure_private_dir(&dir);
         dir
     }
     pub fn pkg_backup_dir(&self) -> PathBuf {
         let dir = self.cache_path.join("pkg-backup");
-        let _ = Config::ensure_dir(&dir);
+        let _ = Config::ensure_private_dir(&dir);
         dir
     }
     pub fn tmp_install_dir(&self) -> PathBuf {
         let dir = self.cache_path.join("tmp-install");
-        let _ = Config::ensure_dir(&dir);
+        let _ = Config::ensure_private_dir(&dir);
         dir
     }
     pub fn update_backup_dir(&self) -> PathBuf {
         let dir = self.install_root.join("etc/lkpm.d/backup");
-        let _ = Config::ensure_backup_dir(&dir);
+        let _ = Config::ensure_dir(&dir);
         dir
     }
 }

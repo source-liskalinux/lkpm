@@ -4,7 +4,7 @@ use std::io::Write;
 use libc;
 use std::path::Path;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::process::{Command, exit};
+use std::process::{Command, exit, ExitStatus};
 use colored::*;
 
 fn log(msg: &str) { println!("{} {}", "::: [ LKMAKE ] ::: (i) >".bright_cyan(), msg); }
@@ -385,12 +385,22 @@ fn read_pkgname() -> Option<String> {
     Some(format!("{}-{}-{}-{}", name, pkgver, pkgrel, arch))
 }
 
-fn run_lkpm(args: &[&str]) -> std::io::Result<std::process::ExitStatus> {
-    let is_root = unsafe { libc::geteuid() } == 0;
+fn run_lkpm(args: &[&str]) -> Result<ExitStatus, std::io::Error> {
+    let is_root = unsafe { libc::getuid() } == 0;
     if is_root {
-        Command::new("lkpm").args(args).status()
+        let status = Command::new("lkpm").args(args).status()?;
+        Ok(status)
     } else {
-        Command::new("sudo").arg("lkpm").args(args).status()
+        match Command::new("lksu").arg("lkpm").args(args).status() {
+            Ok(status) => Ok(status),
+            Err(..) => match Command::new("sudo").arg("lkpm").args(args).status() {
+                Ok(status) => Ok(status),
+                Err(e) => {
+                    log_warn("Failed to run lkpm with lksu and sudo! Did lksu or sudo has been installed?");
+                    Err(e)
+                }
+            },
+        }
     }
 }
 
@@ -460,17 +470,17 @@ fn main() {
     write_install_script(pkgdir);
     let success = package_archive(pkgdir, &pkgname, &projectdir, &fakeroot_state);
     let _ = fs::remove_file(&fakeroot_state);
-    if success { 
-        log_success(&format!("Package successfully created: {}.lsk.tar.zst", pkgname)); 
-    } else { 
-        log_error("Failed to create package tarball!"); 
+    if success {
+        log_success(&format!("Package successfully created: {}.lsk.tar.zst", pkgname));
+    } else {
+        log_error("Failed to create package tarball!");
     }
     if install_after && success {
         let archive = format!("{}{}.lsk.tar.zst", projectdir, pkgname);
         let _ = run_lkpm(&["-ld", &archive, "--noconfirm"]);
     }
     if clean_after && success { 
-        let _ = fs::remove_dir_all(srcdir); 
+        let _ = fs::remove_dir_all(srcdir);
         let _ = fs::remove_dir_all(pkgdir);
     }
 }

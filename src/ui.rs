@@ -1,5 +1,7 @@
 use colored::*;
+use std::fs::OpenOptions;
 use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 
 pub struct PackageSummary {
     pub name: String,
@@ -83,37 +85,82 @@ pub fn confirm(prompt: &str, default: bool) -> bool {
 pub fn sum_success(msg: &str) { println!("{}", msg.bright_green()); }
 pub fn sum_error(msg: &str) { println!("{}", msg.bright_red()); }
 
-pub fn print_operation_summary(entries: &[PackageSummary]) {
-    println!("");
-    println!("─────────────────────────────────────────────────────────────");
-    success("Operation was completed. Summary:");
+fn log_file_path(log_dir: &Path) -> PathBuf {
+    let today = chrono::Local::now().format("%d-%m-%Y").to_string();
+    log_dir.join(format!("{}.log", today))
+}
+
+fn render_operation_summary(entries: &[PackageSummary]) -> String {
+    let now = chrono::Local::now();
+    let mut out = String::new();
+    out.push_str(&format!("‣ Date   : {}\n", now.format("%d-%m-%Y")));
+    out.push_str(&format!("‣ Hour   : {}\n", now.format("%H:%M:%S %z")));
+    out.push_str("Operation summary detailed log:\n");
     for entry in entries.iter() {
-        if entry.status == "installed" || entry.status == "updated" || entry.status == "deleted" {
-            println!("");
-            sum_success(&format!("          ::: [ {} ({}) ] :::", entry.name, entry.version));
-            sum_success(&format!("        • Source      : {}", entry.source));
-            sum_success(&format!("        • Size        : {} bytes", format_bytes(entry.size)));
-            sum_success(&format!("        • Duration    : {}", format_duration(entry.duration)));
-            if !entry.checksum.is_empty() {
-                sum_success(&format!("        • SHA256      : [ {} ]", entry.checksum));
-            } else {
-                sum_success(&format!("{} {}", "        • SHA256      :", "[ FATAL: not provided by the repository! ]".bright_yellow()));
-            }
-            sum_success(&format!("        • Status      : {}", entry.status));
+        out.push('\n');
+        out.push_str(&format!("          ::: [ {} ({}) ] :::\n", entry.name, entry.version));
+        out.push_str(&format!("        • Source      : {}\n", entry.source));
+        out.push_str(&format!("        • Size        : {} bytes\n", format_bytes(entry.size)));
+        out.push_str(&format!("        • Duration    : {}\n", format_duration(entry.duration)));
+        if !entry.checksum.is_empty() {
+            out.push_str(&format!("        • SHA256      : [ {} ]\n", entry.checksum));
         } else {
-            println!("");
-            sum_error(&format!("          ::: [ {} ({}) ] :::", entry.name, entry.version));
-            sum_error(&format!("        • Source      : {}", entry.source));
-            sum_error(&format!("        • Size        : {} bytes", format_bytes(entry.size)));
-            sum_error(&format!("        • Duration    : {}", format_duration(entry.duration)));
-            if !entry.checksum.is_empty() {
-                sum_error(&format!("        • SHA256      : [ {} ]", entry.checksum));
-            } else {
-                sum_error(&format!("{} {}", "        • SHA256      :", "[ FATAL: not provided by the repository! ]".bright_yellow()));
+            out.push_str("        • SHA256      : [ FATAL: not provided by the repository! ]\n");
+        }
+        out.push_str(&format!("        • Status      : {}\n", entry.status));
+    }
+    out.push_str("\n─────────────────────────────────────────────────────────────\n\n");
+    out
+}
+
+fn write_operation_summary_to_log(entries: &[PackageSummary], log_dir: &Path) -> Option<PathBuf> {
+    let path = log_file_path(log_dir);
+    let content = render_operation_summary(entries);
+    match OpenOptions::new().create(true).append(true).open(&path) {
+        Ok(mut file) => {
+            if let Err(e) = file.write_all(content.as_bytes()) {
+                error(&format!("Failed to write detailed summary to {}: {}", path.display(), e));
+                return None;
             }
-            sum_error(&format!("        • Status      : {}", entry.status));
+            Some(path)
+        }
+        Err(e) => {
+            error(&format!("Failed to open {}: {}", path.display(), e));
+            None
         }
     }
+}
+
+pub fn print_operation_summary(entries: &[PackageSummary], log_path: &Path) {
+    let installed = entries
+        .iter()
+        .filter(|e| e.status == "installed" || e.status == "updated" || e.status == "deleted")
+        .count();
+    let failed = entries.len() - installed;
+    println!("");
+    println!("─────────────────────────────────────────────────────────────");
+    println!("");
+    success("Operation was completed. Short summary:");
+    println!("");
+    if failed > 0 {
+        println!(
+            "    {} success, {} failed.",
+            installed.to_string().bright_green(),
+            failed.to_string().bright_red()
+        );
+    } else {
+        println!("    {} package(s) has been proceed.", installed.to_string().bright_green());
+    }
+    println!("");
+    match write_operation_summary_to_log(entries, log_path) {
+        Some(path) => {
+            info(&format!("For detailed summary, please see: {}", path.display()));
+        }
+        None => {
+            warning("Failed to save detailed summary! See the above error log.");
+        }
+    }
+    println!("");
     println!("─────────────────────────────────────────────────────────────");
 }
 

@@ -902,7 +902,7 @@ fn install_local_packages(
             status,
         });
     }
-    ui::print_operation_summary(&results);
+    ui::print_operation_summary(&results, &cfg.log_path);
     Ok(())
 }
 
@@ -1134,7 +1134,7 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
                     status,
                 });
             }
-            ui::print_operation_summary(&results);
+            ui::print_operation_summary(&results, &cfg.log_path);
             Ok(())
         }
         Command::Delete {
@@ -1248,7 +1248,7 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
                     result.status = format!("Error while deleting {}: package record is missing!", *package);
                 }
             }
-            ui::print_operation_summary(&results);
+            ui::print_operation_summary(&results, &cfg.log_path);
             Ok(())
         }
         Command::Refresh { .. } => {
@@ -1453,7 +1453,7 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
                     status,
                 });
             }
-            ui::print_operation_summary(&results);
+            ui::print_operation_summary(&results, &cfg.log_path);
             Ok(())
         }
         Command::UpdateRefresh {
@@ -1594,6 +1594,9 @@ fn cleanup_package_assets(
     }
     let mut removed = 0u64;
     for file in record.files.iter() {
+        if file.is_dir() {
+            continue;
+        }
         let file_size = fs::metadata(file).ok().map(|m| m.len()).unwrap_or(0);
         if is_hidden_path(file) {
             if let Some(pb) = pb {
@@ -1644,6 +1647,11 @@ fn cleanup_package_assets(
             removed += file_size;
             pb.set_position(removed);
         }
+    }
+    let mut dirs: Vec<&PathBuf> = record.files.iter().filter(|p| p.is_dir()).collect();
+    dirs.sort_by_key(|p| std::cmp::Reverse(p.components().count()));
+    for dir in dirs {
+        let _ = fs::remove_dir(dir);
     }
     if let Some(pb) = pb {
         pb.finish();
