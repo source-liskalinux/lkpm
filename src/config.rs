@@ -156,6 +156,7 @@ impl Config {
             .or_else(|_| fs::read_to_string(SYSTEM_CONFIG))
             .unwrap_or_else(|_| DEFAULT_CONFIG.to_string());
         self.apply_config_lua(&text);
+        let _ = self.ensure_storage();
     }
     fn apply_mirrorlist(&mut self, text: &str) {
         let mirrorlist = Mirrorlist::parse(text);
