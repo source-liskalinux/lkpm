@@ -178,7 +178,7 @@ pub fn install_package(
     install_root: &Path,
     pb: Option<&ProgressBar>,
 ) -> Result<Vec<PathBuf>> {
-    let update_backup_root = install_root.join("etc/lkpm.d/backup/pkg-update");
+    let update_backup_root = install_root.join("etc/lkpm.d/backups/pkg-update");
     // No backups list is passed here, so the stash path is never actually
     // used, but install_package_with_backups still wants a package name.
     let package_name = path
@@ -383,6 +383,7 @@ pub fn install_package_with_backups(
     let mut installed_files = Vec::new();
     let mut backups_hashes = HashMap::new();
     let mut update_backups = Vec::new();
+    let mut modified_backups = Vec::new();
     let reader = open_package_reader(package_path)?;
     let mut archive = Archive::new(reader);
     for entry in archive.entries()? {
@@ -416,8 +417,8 @@ pub fn install_package_with_backups(
                     let _ = fs::create_dir_all(parent);
                 }
                 let _ = fs::copy(&new_file_path, &stash_dest);
-                let _ = fs::remove_file(&new_file_path);
                 update_backups.push(stash_dest.clone());
+                modified_backups.push((target_path, stash_dest));
             }
         }
         if let Some(pb) = pb {
@@ -432,6 +433,9 @@ pub fn install_package_with_backups(
             let mut entry = entry?;
             unpack_entry_safely(&mut entry, install_root)?;
         }
+    }
+    for (target_path, stash_dest) in modified_backups {
+        let _ = fs::copy(&stash_dest, &target_path);
     }
     for backup_rel in backup_set.keys() {
         let target_path = install_root.join(backup_rel);

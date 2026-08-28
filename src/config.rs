@@ -193,17 +193,17 @@ impl Config {
         dir
     }
     pub fn backup_dir(&self) -> PathBuf {
-        let dir = self.install_root.join("etc/lkpm.d/backup");
+        let dir = self.install_root.join("etc/lkpm.d/backups");
         let _ = Config::ensure_dir(&dir);
         dir
     }
     pub fn update_backup_dir(&self) -> PathBuf {
-        let dir = self.install_root.join("etc/lkpm.d/backup/pkg-update");
+        let dir = self.install_root.join("etc/lkpm.d/backups/pkg-update");
         let _ = Config::ensure_dir(&dir);
         dir
     }
     pub fn delete_backup_dir(&self) -> PathBuf {
-        let dir = self.install_root.join("etc/lkpm.d/backup/pkg-delete");
+        let dir = self.install_root.join("etc/lkpm.d/backups/pkg-delete");
         let _ = Config::ensure_dir(&dir);
         dir
     }
@@ -214,7 +214,7 @@ impl Config {
     ) -> PathBuf {
         backup_dir
             .join(package_name)
-            .join(format!("{}.lkpmsave", file_name.to_string_lossy()))
+            .join(format!("{}.save", file_name.to_string_lossy()))
     }
 }
 

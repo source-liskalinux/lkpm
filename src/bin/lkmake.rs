@@ -2,7 +2,7 @@ use std::env;
 use std::fs;
 use std::io::Write;
 use libc;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::process::{Command, exit, ExitStatus};
 use colored::*;
@@ -404,6 +404,22 @@ fn run_lkpm(args: &[&str]) -> Result<ExitStatus, std::io::Error> {
     }
 }
 
+fn cleanup_dir(dir: &str) -> Result<(), String> {
+    if PathBuf::from(&dir).exists() {
+        for entry in fs::read_dir(&dir).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let path = entry.path();
+            if path.is_dir() {
+                fs::remove_dir_all(&path).map_err(|e| e.to_string())?;
+            } else {
+                fs::remove_file(&path).map_err(|e| e.to_string())?;
+            }
+        }
+        fs::remove_dir(&dir).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 fn fakeroot_state_path() -> String {
     let cache_dir = env::var("XDG_CACHE_HOME")
         .ok()
@@ -480,7 +496,7 @@ fn main() {
         let _ = run_lkpm(&["-ld", &archive, "--noconfirm"]);
     }
     if clean_after && success { 
-        let _ = fs::remove_dir_all(srcdir);
-        let _ = fs::remove_dir_all(pkgdir);
+        let _ = cleanup_dir(srcdir);
+        let _ = cleanup_dir(pkgdir);
     }
 }
