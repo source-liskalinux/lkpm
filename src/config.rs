@@ -26,12 +26,11 @@ pub struct Config {
 
 impl Config {
     pub fn ensure_private_dir(dir: &PathBuf) -> Result<(), LkpmError> {
+        if let Some(parent) = dir.parent() {
+            Config::ensure_dir(&parent.to_path_buf())?;
+        }
         if !dir.exists() {
-            let mut builder = fs::DirBuilder::new();
-            builder.recursive(true);
-            #[cfg(unix)]
-            builder.mode(0o700);
-            builder.create(dir).map_err(LkpmError::Io)?;
+            fs::create_dir(dir).map_err(LkpmError::Io)?;
         }
         #[cfg(unix)]
         {
@@ -41,12 +40,11 @@ impl Config {
         Ok(())
     }
     pub fn ensure_dir(dir: &PathBuf) -> Result<(), LkpmError> {
+        if let Some(parent) = dir.parent() {
+            Config::ensure_dir(&parent.to_path_buf())?;
+        }
         if !dir.exists() {
-            let mut builder = fs::DirBuilder::new();
-            builder.recursive(true);
-            #[cfg(unix)]
-            builder.mode(0o755);
-            builder.create(dir).map_err(LkpmError::Io)?;
+            fs::create_dir(dir).map_err(LkpmError::Io)?;
         }
         #[cfg(unix)]
         {

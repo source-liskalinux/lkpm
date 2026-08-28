@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 #[cfg(unix)]
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+use std::os::unix::fs::PermissionsExt;
 
 fn default_source_kind() -> String {
     "unknown".into()
@@ -45,12 +45,11 @@ pub struct Database {
 
 impl Database {
     fn ensure_db_dir(db_path: &PathBuf) -> Result<(), LkpmError> {
+        if let Some(parent) = db_path.parent() {
+            Config::ensure_dir(&parent.to_path_buf())?;
+        }
         if !db_path.exists() {
-            let mut builder = fs::DirBuilder::new();
-            builder.recursive(true);
-            #[cfg(unix)]
-            builder.mode(0o700);
-            builder.create(db_path).map_err(LkpmError::Io)?;
+            fs::create_dir(db_path).map_err(LkpmError::Io)?;
         }
         #[cfg(unix)]
         {
@@ -61,7 +60,7 @@ impl Database {
     }
     #[cfg(unix)]
     fn ensure_db_file_mode(db_file: &PathBuf) -> Result<(), LkpmError> {
-        fs::set_permissions(db_file, fs::Permissions::from_mode(0o600)).map_err(LkpmError::Io)
+        fs::set_permissions(db_file, fs::Permissions::from_mode(0o400)).map_err(LkpmError::Io)
     }
     #[cfg(not(unix))]
     fn ensure_db_file_mode(_db_file: &PathBuf) -> Result<(), LkpmError> {
