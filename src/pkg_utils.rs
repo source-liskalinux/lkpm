@@ -383,7 +383,6 @@ pub fn install_package_with_backups(
     let mut installed_files = Vec::new();
     let mut backups_hashes = HashMap::new();
     let mut update_backups = Vec::new();
-    let mut modified_backups: Vec<(PathBuf, PathBuf)> = Vec::new();
     let reader = open_package_reader(package_path)?;
     let mut archive = Archive::new(reader);
     for entry in archive.entries()? {
@@ -419,7 +418,6 @@ pub fn install_package_with_backups(
                 let _ = fs::copy(&target_path, &stash_dest);
                 let _ = fs::remove_file(&target_path);
                 update_backups.push(stash_dest.clone());
-                modified_backups.push((target_path, stash_dest));
             }
         }
         if let Some(pb) = pb {
@@ -434,9 +432,6 @@ pub fn install_package_with_backups(
             let mut entry = entry?;
             unpack_entry_safely(&mut entry, install_root)?;
         }
-    }
-    for (target_path, stash_dest) in modified_backups {
-        let _ = fs::copy(&stash_dest, &target_path);
     }
     for backup_rel in backup_set.keys() {
         let target_path = install_root.join(backup_rel);
