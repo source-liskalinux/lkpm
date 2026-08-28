@@ -14,8 +14,10 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::env;
 use std::path::{Component, Path, PathBuf};
-use std::time::Instant;
+use std::time::{Instant, Duration};
 use colored::Colorize;
+
+const REFRESH_INTERVAL_SECS: u64 = 15 * 60;
 
 fn require_root() -> Result<(), LkpmError> {
     if unsafe { libc::getuid() } != 0 {
@@ -683,6 +685,51 @@ fn check_repository_connections(cfg: &Config) -> Result<(), LkpmError> {
     Ok(())
 }
 
+fn is_metadata_stale(path: &PathBuf) -> bool {
+    let stamp_path = path.join("last-refresh");
+    if let Ok(metadata) = fs::metadata(stamp_path) {
+        if let Ok(mtime) = metadata.modified() {
+            if let Ok(elapsed) = mtime.elapsed() {
+                return elapsed >= Duration::from_secs(REFRESH_INTERVAL_SECS);
+            }
+        }
+    }
+    true
+}
+
+fn touch_refresh_stamp(dir: &PathBuf) {
+    if fs::create_dir_all(dir).is_ok() {
+        let stamp_path = dir.join("last-refresh");
+        let _ = fs::write(stamp_path, "");
+    }
+}
+
+fn refresh_metadata(cfg: &Config, force: bool) -> Result<(), LkpmError> {
+    let dir = &cfg.last_path;
+    if force || is_metadata_stale(&dir) {
+        ui::info("Refreshing repository metadata....");
+        fs::create_dir_all(&cfg.cache_path).map_err(LkpmError::Io)?;
+        let refreshed = repo::refresh_repo_metadata(&cfg)?;
+        if refreshed.is_empty() {
+            if cfg.core_repos.is_empty() && cfg.extra_mirrors.is_empty() {
+                ui::error("No main repository that has been configured!");
+            } else {
+                ui::warning("Repository metadata refresh completed but no metadata files were refreshed!");
+            }
+        } else {
+            ui::success("Repository metadata has been refreshed successfully!");
+        }
+        check_repository_connections(&cfg)?;
+        if refreshed.is_empty() {
+            ui::warning("Repository host is reachable but metadata cache could not be refreshed!");
+        } else {
+            ui::success("Repository metadata cache is ready.");
+            touch_refresh_stamp(&dir);
+        }
+    }
+    Ok(())
+}
+
 #[derive(Clone)]
 struct InstallTarget {
     requested_name: Option<String>,
@@ -746,6 +793,7 @@ fn apply_root_override(cfg: &mut Config, root: Option<PathBuf>) -> Result<(), Lk
         cfg.db_path = root.join("var/db/lkpm");
         cfg.cache_path = root.join("var/cache/lkpm");
         cfg.log_path = root.join("var/log/lkpm");
+        cfg.last_path = root.join("run/lkpm");
         cfg.apply_system_config_for_root(&root);
         cfg.reload_mirrorlist_for_root();
     }
@@ -971,25 +1019,8 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
             }
             require_root_for_install_root(&cfg)?;
             ui::start_operation("Starting the operation....");
+            refresh_metadata(&cfg, false)?;
             let duration = Instant::now();
-            ui::info("Refreshing repository metadata....");
-            fs::create_dir_all(&cfg.cache_path).map_err(LkpmError::Io)?;
-            let refreshed = repo::refresh_repo_metadata(&cfg)?;
-            if refreshed.is_empty() {
-                if cfg.core_repos.is_empty() && cfg.extra_mirrors.is_empty() {
-                    ui::error("No main repository that has been configured!");
-                } else {
-                    ui::warning("Repository metadata refresh completed but no metadata files were refreshed!");
-                }
-            } else {
-                ui::success("Repository metadata has been refreshed successfully!");
-            }
-            check_repository_connections(&cfg)?;
-            if refreshed.is_empty() {
-                ui::warning("Repository host is reachable but metadata cache could not be refreshed!");
-            } else {
-                ui::success("Repository metadata cache is ready.");
-            }
             let mut installs = Vec::new();
             for pkg_name in packages.iter() {
                 let target = build_install_target(&cfg, pkg_name)?;
@@ -1284,24 +1315,7 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
         }
         Command::Refresh { .. } => {
             require_root_for_install_root(&cfg)?;
-            ui::info("Refreshing repository metadata....");
-            fs::create_dir_all(&cfg.cache_path).map_err(LkpmError::Io)?;
-            let refreshed = repo::refresh_repo_metadata(&cfg)?;
-            if refreshed.is_empty() {
-                if cfg.core_repos.is_empty() && cfg.extra_mirrors.is_empty() {
-                    ui::error("No main repository that has been configured!");
-                } else {
-                    ui::warning("Repository metadata refresh completed but no metadata files were refreshed!");
-                }
-            } else {
-                ui::success("Repository metadata has been refreshed successfully!");
-            }
-            check_repository_connections(&cfg)?;
-            if refreshed.is_empty() {
-                ui::warning("Repository host is reachable but metadata cache could not be refreshed!");
-            } else {
-                ui::success("Repository metadata cache is ready.");
-            }
+            refresh_metadata(&cfg, true)?;
             Ok(())
         }
         Command::Update {
@@ -1493,23 +1507,7 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
             root,
         } => {
             require_root_for_install_root(&cfg)?;
-            ui::info("Refreshing repository metadata...");
-            let refreshed = repo::refresh_repo_metadata(&cfg)?;
-            if refreshed.is_empty() {
-                if cfg.core_repos.is_empty() && cfg.extra_mirrors.is_empty() {
-                    ui::error("No main repository that has been configured!");
-                } else {
-                    ui::warning("Repository metadata refresh completed but no metadata files were refreshed!");
-                }
-            } else {
-                ui::success("Repository metadata has been refreshed successfully!");
-            }
-            check_repository_connections(&cfg)?;
-            if refreshed.is_empty() {
-                ui::warning("Repository host is reachable but metadata cache could not be refreshed!");
-            } else {
-                ui::success("Repository metadata cache is ready.");
-            }
+            refresh_metadata(&cfg, true)?;
             let default = true;
             if !confirm_operation(noconfirm, "Proceed with update after refresh?", default) {
                 ui::error("Update after refresh aborted by the user.");

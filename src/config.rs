@@ -22,6 +22,7 @@ pub struct Config {
     pub cache_path: PathBuf,
     pub install_root: PathBuf,
     pub log_path: PathBuf,
+    pub last_path: PathBuf,
 }
 
 impl Config {
@@ -57,6 +58,7 @@ impl Config {
         Config::ensure_private_dir(&self.cache_path)?;
         Config::ensure_private_dir(&self.db_path)?;
         Config::ensure_private_dir(&self.log_path)?;
+        Config::ensure_private_dir(&self.last_path)?;
         let _ = self.download_dir();
         let _ = self.install_script_dir();
         let _ = self.pkg_backup_dir();
@@ -89,6 +91,7 @@ impl Config {
             cache_path: PathBuf::from("/var/cache/lkpm"),
             install_root: PathBuf::from("/"),
             log_path: PathBuf::from("/var/log/lkpm"),
+            last_path: PathBuf::from("/run/lkpm"),
         }
     }
     fn apply_system_mirrorlist(&mut self) {
@@ -136,11 +139,13 @@ impl Config {
             .unwrap_or_else(|_| DEFAULT_CONFIG.to_string());   
         let saved_cache = self.cache_path.clone();
         let saved_root = self.install_root.clone();
-        let saved_log_path = self.log_path.clone();   
+        let saved_log = self.log_path.clone();
+        let saved_last = self.last_path.clone();
         self.apply_config_lua(&text);
         self.cache_path = saved_cache;
         self.install_root = saved_root;
-        self.log_path = saved_log_path;
+        self.log_path = saved_log;
+        self.last_path = saved_last;
         let _ = self.ensure_storage();
     }
     pub fn reload_mirrorlist_for_root(&mut self) {

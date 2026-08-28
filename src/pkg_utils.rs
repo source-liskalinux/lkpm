@@ -365,7 +365,7 @@ pub fn install_package_with_backups(
         .as_nanos();
     let tmp_dir = tmp_base.join(format!("extract-{}-{}", pid, timestamp));
     fs::create_dir_all(&tmp_dir)?;
-    let _guard = TempDirGuard(&tmp_dir);
+    let _ = TempDirGuard(&tmp_dir);
     let tmp_path = tmp_dir.as_path();
     {
         let reader = open_package_reader(package_path)?;
@@ -383,7 +383,7 @@ pub fn install_package_with_backups(
     let mut installed_files = Vec::new();
     let mut backups_hashes = HashMap::new();
     let mut update_backups = Vec::new();
-    let mut modified_backups = Vec::new();
+    let mut modified_backups: Vec<(PathBuf, PathBuf)> = Vec::new();
     let reader = open_package_reader(package_path)?;
     let mut archive = Archive::new(reader);
     for entry in archive.entries()? {
@@ -398,11 +398,18 @@ pub fn install_package_with_backups(
         installed_files.push(target_path.clone());
         if backup_set.contains_key(&rel_str) && target_path.exists() && target_path.is_file() {
             let existing_hash = hash_file(&target_path).unwrap_or_default();
-            let pristine_hash = previous_hashes.get(&rel_str);
-            let modified = match pristine_hash {
-                Some(ph) => &existing_hash != ph,
+            let original_hash = previous_hashes.get(&rel_str);
+            let new_file_path = tmp_path.join(&resolved_path);
+            let user_modified = match original_hash {
+                Some(orig) => existing_hash != *orig,
                 None => true,
             };
+            let new_hash = if new_file_path.exists() {
+                hash_file(&new_file_path).unwrap_or_default()
+            } else {
+                String::new()
+            };
+            let modified = user_modified && (existing_hash != new_hash);
             if modified {
                 let file_name = entry_path.file_name().unwrap_or_default();
                 let stash_dest = Config::lkpmsave_path(update_backup_root, package_name, file_name);
@@ -411,7 +418,7 @@ pub fn install_package_with_backups(
                 }
                 let _ = fs::copy(&target_path, &stash_dest);
                 update_backups.push(stash_dest.clone());
-                modified_backups.push((target_path.clone(), stash_dest));
+                modified_backups.push((target_path, stash_dest));
             }
         }
         if let Some(pb) = pb {
