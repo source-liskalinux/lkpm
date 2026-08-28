@@ -415,8 +415,8 @@ pub fn install_package_with_backups(
                 if let Some(parent) = stash_dest.parent() {
                     let _ = fs::create_dir_all(parent);
                 }
-                let _ = fs::copy(&target_path, &stash_dest);
-                let _ = fs::remove_file(&target_path);
+                let _ = fs::copy(&new_file_path, &stash_dest);
+                let _ = fs::remove_file(&new_file_path);
                 update_backups.push(stash_dest.clone());
             }
         }
