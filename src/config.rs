@@ -35,7 +35,7 @@ impl Config {
         #[cfg(unix)]
         {
             fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
-            .map_err(LkpmError::Io)?;
+                .map_err(LkpmError::Io)?;
         }
         Ok(())
     }
@@ -49,8 +49,21 @@ impl Config {
         #[cfg(unix)]
         {
             fs::set_permissions(dir, fs::Permissions::from_mode(0o755))
-            .map_err(LkpmError::Io)?;
+                .map_err(LkpmError::Io)?;
         }
+        Ok(())
+    }
+    fn ensure_storage(&self) -> Result<(), LkpmError> {
+        Config::ensure_private_dir(&self.cache_path)?;
+        Config::ensure_private_dir(&self.db_path)?;
+        Config::ensure_private_dir(&self.log_path)?;
+        let _ = self.download_dir();
+        let _ = self.install_script_dir();
+        let _ = self.pkg_backup_dir();
+        let _ = self.tmp_install_dir();
+        let _ = self.backup_dir();
+        let _ = self.update_backup_dir();
+        let _ = self.delete_backup_dir();
         Ok(())
     }
     pub fn load() -> Self {
@@ -102,11 +115,9 @@ impl Config {
         }   
         if let Ok(val) = globals.get::<String>("cache_path") {
             self.cache_path = PathBuf::from(val);
-            let _ = Config::ensure_private_dir(&self.cache_path);
         }
         if let Ok(val) = globals.get::<String>("log_path") {
             self.log_path = PathBuf::from(val);
-            let _ = Config::ensure_private_dir(&self.log_path);
         }
         if let Ok(val) = globals.get::<String>("arch") {
             self.arch = val;
@@ -125,11 +136,12 @@ impl Config {
             .unwrap_or_else(|_| DEFAULT_CONFIG.to_string());   
         let saved_cache = self.cache_path.clone();
         let saved_root = self.install_root.clone();
-        let saved_log_path = self.log_path.clone();
+        let saved_log_path = self.log_path.clone();   
         self.apply_config_lua(&text);
         self.cache_path = saved_cache;
         self.install_root = saved_root;
         self.log_path = saved_log_path;
+        let _ = self.ensure_storage();
     }
     pub fn reload_mirrorlist_for_root(&mut self) {
         let root_mirrorlist = self.install_root.join("etc/lkpm.d/mirrorlist");

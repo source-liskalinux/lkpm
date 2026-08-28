@@ -7,6 +7,7 @@ use crate::error::LkpmError::PackageNotFound;
 use crate::pkg_utils as pkg;
 use crate::repo;
 use crate::ui;
+use std::ffi::CString;
 use indicatif::ProgressBar;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -15,20 +16,6 @@ use std::env;
 use std::path::{Component, Path, PathBuf};
 use std::time::Instant;
 use colored::Colorize;
-
-fn ensure_storage(cfg: &Config) -> Result<(), LkpmError> {
-    Config::ensure_private_dir(&cfg.cache_path)?;
-    Config::ensure_private_dir(&cfg.db_path)?;
-    Config::ensure_private_dir(&cfg.log_path)?;
-    Config::download_dir(&cfg);
-    Config::install_script_dir(&cfg);
-    Config::pkg_backup_dir(&cfg);
-    Config::tmp_install_dir(&cfg);
-    Config::backup_dir(&cfg);
-    Config::update_backup_dir(&cfg);
-    Config::delete_backup_dir(&cfg);
-    Ok(())
-}
 
 fn require_root() -> Result<(), LkpmError> {
     if unsafe { libc::getuid() } != 0 {
@@ -212,6 +199,26 @@ fn run_post_install_hook(cfg: &Config, extracted: &ExtractedPackage) -> Option<S
     None
 }
 
+fn cleanup(path: &PathBuf) {
+    if path.is_dir() {
+        if let Ok(read_dir) = fs::read_dir(path) {
+            for entry in read_dir.flatten() {
+                let entry_path = entry.path();
+                if entry_path.is_dir() {
+                    let _ = fs::remove_dir_all(&entry_path);
+                } else {
+                    let _ = fs::remove_file(&entry_path);
+                }
+            }
+        }
+    }
+    if let Some(path_str) = path.to_str() {
+        if let Ok(c_path) = CString::new(path_str) {
+            let _ = unsafe { libc::rmdir(c_path.as_ptr()) };
+        }
+    }
+}
+
 // Copy every file the previous version of a package owns into
 // "cfg.pkg_backup_dir()/<pkg>-<old-version>/....". (mirroring their path
 // relative to "install_root"), before the new version overwrites them.
@@ -224,7 +231,7 @@ fn backup_previous_files(cfg: &Config, previous: &InstalledPackage) -> Result<Pa
     // Clear out any stale backup left over from an earlier failed attempt
     // before writing a fresh one.
     if backup_root.exists() {
-        fs::remove_dir_all(&backup_root).map_err(LkpmError::Io)?;
+        cleanup(&backup_root);
     }
     fs::create_dir_all(&backup_root).map_err(LkpmError::Io)?;
     for file in previous.files.iter() {
@@ -300,10 +307,18 @@ fn rollback_extracted_package(cfg: &Config, db: &mut Database, extracted: &Extra
                 if untouched.contains(file) {
                     continue;
                 }
-                if !prev_files.contains(file) && file.exists() {
+                if !prev_files.contains(file) && file.exists() && !file.is_dir() {
                     if let Err(e) = fs::remove_file(file) {
                         ui::warning(&format!(
                             "Failed to remove new file {} while rolling back {}: {}",
+                            file.display(), extracted.metadata.name, e
+                        ));
+                    }
+                }
+                if !prev_files.contains(file) && file.exists() && file.is_dir() {
+                    if let Err(e) = fs::remove_dir(file) {
+                        ui::warning(&format!(
+                            "Failed to remove new directory {} while rolling back {}: {}",
                             file.display(), extracted.metadata.name, e
                         ));
                     }
@@ -315,12 +330,7 @@ fn rollback_extracted_package(cfg: &Config, db: &mut Database, extracted: &Extra
                     extracted.metadata.name, prev.version, e
                 ));
             }
-            if let Err(e) = fs::remove_dir_all(backup_root) {
-                ui::warning(&format!(
-                    "Failed to clean up backup for {}: {}",
-                    extracted.metadata.name, e
-                ));
-            }
+            let _ = cleanup(&backup_root);
             ui::warning(&format!(
                 "{} restored to {}.",
                 extracted.metadata.name, prev.version
@@ -332,7 +342,11 @@ fn rollback_extracted_package(cfg: &Config, db: &mut Database, extracted: &Extra
                     continue;
                 }
                 if file.exists() {
-                    let _ = fs::remove_file(file);
+                    if !file.is_dir() {
+                        let _ = fs::remove_file(file);
+                    } else {
+                        let _ = fs::remove_dir(file);
+                    }
                 }
             }
             if let Err(e) = db.remove(cfg, &extracted.metadata.name) {
@@ -351,10 +365,18 @@ fn rollback_extracted_package(cfg: &Config, db: &mut Database, extracted: &Extra
                 if untouched.contains(file) {
                     continue;
                 }
-                if file.exists() {
+                if file.exists() && !file.is_dir() {
                     if let Err(e) = fs::remove_file(file) {
                         ui::warning(&format!(
-                            "Failed to remove {} while rolling back {}: {}",
+                            "Failed to remove file {} while rolling back {}: {}",
+                            file.display(), extracted.metadata.name, e
+                        ));
+                    }
+                }
+                if file.exists() && file.is_dir() {
+                    if let Err(e) = fs::remove_dir(file) {
+                        ui::warning(&format!(
+                            "Failed to remove directory {} while rolling back {}: {}",
                             file.display(), extracted.metadata.name, e
                         ));
                     }
@@ -723,6 +745,7 @@ fn apply_root_override(cfg: &mut Config, root: Option<PathBuf>) -> Result<(), Lk
         cfg.install_root = root.clone();
         cfg.db_path = root.join("var/db/lkpm");
         cfg.cache_path = root.join("var/cache/lkpm");
+        cfg.log_path = root.join("var/log/lkpm");
         cfg.apply_system_config_for_root(&root);
         cfg.reload_mirrorlist_for_root();
     }
@@ -918,15 +941,14 @@ fn install_local_packages(
 pub fn handle(cmd: Command) -> Result<(), LkpmError> {
     let mut cfg = Config::load();
     match &cmd {
-        Command::Install { root, .. }
-        | Command::Update { root, .. }
-        | Command::Delete { root, .. }
-        | Command::Refresh { root }
-        | Command::UpdateRefresh { root, .. } => apply_root_override(&mut cfg, root.clone())?,
+        Command::Install { root, .. } => apply_root_override(&mut cfg, root.clone())?,
+        Command::Update { root, .. } => apply_root_override(&mut cfg, root.clone())?,
+        Command::Delete { root, .. } => apply_root_override(&mut cfg, root.clone())?,
+        Command::Refresh { root } => apply_root_override(&mut cfg, root.clone())?,
+        Command::UpdateRefresh { root, .. } => apply_root_override(&mut cfg, root.clone())?,
         Command::Package { root, .. } => apply_root_override(&mut cfg, root.clone())?,
         _ => {}
     }
-    ensure_storage(&cfg)?;
     let mut db = Database::load(&cfg)?;
     match cmd {
         Command::Install {
