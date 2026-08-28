@@ -27,14 +27,16 @@ backup=(
     'etc/lkinit.d/init.rs'
 )
 
+prepare() {
+    cargo check --release --all-targets
+}
+
 build() {
-    echo "--> [BUILD] Compiling lkpm, lkmake, lkinit, and lkchroot...."
     cargo build --release
 }
 
 check() {
-    echo "-- [CHECK] Checking compiled binary...."
-    cargo check --release --all-targets
+    cargo test --release
 }
 
 package() {
