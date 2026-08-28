@@ -5,6 +5,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufReader, Read};
+use std::ffi::CString;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use tar::{Archive, EntryType};
@@ -35,7 +36,24 @@ struct TempDirGuard<'a>(&'a Path);
 
 impl Drop for TempDirGuard<'_> {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(self.0);
+        let path = self.0;
+        if path.is_dir() {
+            if let Ok(read_dir) = fs::read_dir(path) {
+                for entry in read_dir.flatten() {
+                    let entry_path = entry.path();
+                    if entry_path.is_dir() {
+                        let _ = fs::remove_dir_all(&entry_path);
+                    } else {
+                        let _ = fs::remove_file(&entry_path);
+                    }
+                }
+            }
+        }
+        if let Some(path_str) = path.to_str() {
+            if let Ok(c_path) = CString::new(path_str) {
+                let _ = unsafe { libc::rmdir(c_path.as_ptr()) };
+            }
+        }
     }
 }
 
@@ -158,8 +176,14 @@ pub fn install_package(
     install_root: &Path,
     pb: Option<&ProgressBar>,
 ) -> Result<Vec<PathBuf>> {
-    let update_backup_root = install_root.join("etc/lkpm.d/backup");
-    let result = install_package_with_backups(path, install_root, &[], &HashMap::new(), &update_backup_root, pb)?;
+    let update_backup_root = install_root.join("etc/lkpm.d/backup/pkg-update");
+    // No backups list is passed here, so the stash path is never actually
+    // used, but install_package_with_backups still wants a package name.
+    let package_name = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let result = install_package_with_backups(path, install_root, &package_name, &[], &HashMap::new(), &update_backup_root, pb)?;
     Ok(result.installed_files)
 }
 
@@ -306,6 +330,7 @@ fn unpack_entry_safely<R: Read>(entry: &mut tar::Entry<R>, dst_root: &Path) -> R
 pub fn install_package_with_backups(
     package_path: &Path,
     install_root: &Path,
+    package_name: &str,
     backups: &[String],
     previous_hashes: &HashMap<String, String>,
     update_backup_root: &Path,
@@ -359,7 +384,8 @@ pub fn install_package_with_backups(
                 None => true,
             };
             if modified {
-                let stash_dest = update_backup_root.join(&entry_path);
+                let file_name = entry_path.file_name().unwrap_or_default();
+                let stash_dest = Config::lkpmsave_path(update_backup_root, package_name, file_name);
                 if let Some(parent) = stash_dest.parent() {
                     let _ = fs::create_dir_all(parent);
                 }

@@ -17,8 +17,16 @@ use std::time::Instant;
 use colored::Colorize;
 
 fn ensure_storage(cfg: &Config) -> Result<(), LkpmError> {
-    fs::create_dir_all(&cfg.cache_path).map_err(LkpmError::Io)?;
-    fs::create_dir_all(&cfg.db_path).map_err(LkpmError::Io)?;
+    Config::ensure_private_dir(&cfg.cache_path)?;
+    Config::ensure_private_dir(&cfg.db_path)?;
+    Config::ensure_private_dir(&cfg.log_path)?;
+    Config::download_dir(&cfg);
+    Config::install_script_dir(&cfg);
+    Config::pkg_backup_dir(&cfg);
+    Config::tmp_install_dir(&cfg);
+    Config::backup_dir(&cfg);
+    Config::update_backup_dir(&cfg);
+    Config::delete_backup_dir(&cfg);
     Ok(())
 }
 
@@ -134,6 +142,7 @@ fn extract_package(
     let result = pkg::install_package_with_backups(
         path,
         &cfg.install_root,
+        &metadata.name,
         &metadata.backups,
         &previous_hashes,
         &update_backup_root,
@@ -1618,11 +1627,13 @@ fn cleanup_package_assets(
             });
             let modified = matches!((&current_hash, pristine_hash), (Some(current), Some(pristine)) if current != pristine);
             if modified {
-                let saved_name = format!(
-                    "{}.lkpmsave",
-                    file.file_name().unwrap_or_default().to_string_lossy()
-                );
-                let saved_path = file.with_file_name(saved_name);
+                let file_name = file.file_name().unwrap_or_default();
+                let saved_path = Config::lkpmsave_path(&cfg.delete_backup_dir(), &record.name, file_name);
+                if let Some(parent) = saved_path.parent() {
+                    if let Err(e) = fs::create_dir_all(parent) {
+                        return Err(LkpmError::Io(e));
+                    }
+                }
                 if let Err(e) = fs::rename(file, &saved_path) {
                     return Err(LkpmError::Io(e));
                 }

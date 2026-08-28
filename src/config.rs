@@ -25,7 +25,7 @@ pub struct Config {
 }
 
 impl Config {
-    fn ensure_private_dir(dir: &PathBuf) -> Result<(), LkpmError> {
+    pub fn ensure_private_dir(dir: &PathBuf) -> Result<(), LkpmError> {
         if !dir.exists() {
             let mut builder = fs::DirBuilder::new();
             builder.recursive(true);
@@ -176,10 +176,29 @@ impl Config {
         let _ = Config::ensure_private_dir(&dir);
         dir
     }
-    pub fn update_backup_dir(&self) -> PathBuf {
+    pub fn backup_dir(&self) -> PathBuf {
         let dir = self.install_root.join("etc/lkpm.d/backup");
         let _ = Config::ensure_dir(&dir);
         dir
+    }
+    pub fn update_backup_dir(&self) -> PathBuf {
+        let dir = self.install_root.join("etc/lkpm.d/backup/pkg-update");
+        let _ = Config::ensure_dir(&dir);
+        dir
+    }
+    pub fn delete_backup_dir(&self) -> PathBuf {
+        let dir = self.install_root.join("etc/lkpm.d/backup/pkg-delete");
+        let _ = Config::ensure_dir(&dir);
+        dir
+    }
+    pub fn lkpmsave_path(
+        backup_dir: &std::path::Path,
+        package_name: &str,
+        file_name: &std::ffi::OsStr,
+    ) -> PathBuf {
+        backup_dir
+            .join(package_name)
+            .join(format!("{}.lkpmsave", file_name.to_string_lossy()))
     }
 }
 
