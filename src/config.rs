@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use crate::error::LkpmError;
 use mlua::Lua;
 #[cfg(unix)]
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+use std::os::unix::fs::PermissionsExt;
 
 const SYSTEM_MIRRORLIST: &str = "/etc/lkpm.d/mirrorlist";
 const SYSTEM_CONFIG: &str = "/etc/lkpm.d/config.lua";
