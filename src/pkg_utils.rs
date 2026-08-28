@@ -7,6 +7,8 @@ use std::fs::{self, File};
 use std::io::{BufReader, Read};
 use std::ffi::CString;
 use std::path::{Component, Path, PathBuf};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 use tar::{Archive, EntryType};
 use xz2::read::XzDecoder;
@@ -249,6 +251,23 @@ fn remove_existing_path(path: &Path) {
     }
 }
 
+// fs::create_dir_all() ignores the tarball entirely and just uses the
+// process umask so directories created by unpack_entry_safely need their
+// mode applied by hand to actually match what the package declared. Regular
+// files, symlink, or hardlinks go through tar own entry.unpack() which already
+// respects Archive::set_preserve_permissions, this is only for the
+// directory path which bypasses that.
+fn apply_entry_mode(entry_header: &tar::Header, target: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        if let Ok(mode) = entry_header.mode() {
+            fs::set_permissions(target, fs::Permissions::from_mode(mode))
+                .with_context(|| format!("Failed to set permissions on {}", target.display()))?;
+        }
+    }
+    Ok(())
+}
+
 fn unpack_entry_safely<R: Read>(entry: &mut tar::Entry<R>, dst_root: &Path) -> Result<()> {
     let raw_entry_path = entry.path()?;
     let entry_path = sanitize_entry_path(&raw_entry_path)?;
@@ -268,6 +287,7 @@ fn unpack_entry_safely<R: Read>(entry: &mut tar::Entry<R>, dst_root: &Path) -> R
             }
         }
         fs::create_dir_all(&target)?;
+        apply_entry_mode(entry.header(), &target)?;
         return Ok(());
     }
     if entry_type.is_hard_link() {
