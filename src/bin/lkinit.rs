@@ -3,12 +3,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, exit, Stdio};
 use std::io::{Write, Read};
-use colored::*;
 use indicatif::{ProgressBar, ProgressStyle};
-
-fn info(msg: &str) { println!("{} {}", "[i]".bright_cyan(), msg); }
-fn success(msg: &str) { println!("{} {}", "[✓]".bright_green(), msg.bright_green()); }
-fn error(msg: &str) { eprintln!("{} {}", "[✗]".bright_red(), msg.bright_red()); }
+use lkpm::ui::{info, success, error};
 
 fn require_root() {
     if unsafe { libc::getuid() } != 0 {

@@ -26,6 +26,7 @@ backup=(
     'etc/lkinit.d/Cargo.toml'
     'etc/lkinit.d/init.rs'
 )
+install="lkpm.install"
 
 prepare() {
     cargo check --release --all-targets

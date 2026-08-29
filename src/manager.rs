@@ -7,7 +7,7 @@ use crate::error::LkpmError::PackageNotFound;
 use crate::pkg_utils as pkg;
 use crate::repo;
 use crate::ui;
-use std::ffi::CString;
+use crate::cleanup::cleanup;
 use indicatif::ProgressBar;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -129,27 +129,33 @@ fn extract_package(
         Some(prev) => Some(backup_previous_files(cfg, prev)?),
         None => None,
     };
-    let update_backup_root = cfg.updated_backup_dir();
+    let updated_backup_root = cfg.updated_backup_dir();
     let modified_backup_root = cfg.modified_backup_dir();
+    let exists_backup_root = cfg.exists_backup_dir();
     let result = pkg::install_package_with_backups(
         path,
         &cfg.install_root,
         &metadata.name,
         &metadata.backups,
         &previous_hashes,
-        &update_backup_root,
+        &updated_backup_root,
         &modified_backup_root,
+        &exists_backup_root,
         None,
     )
     .map_err(LkpmError::from)?;
     for (backup_file, reason) in result.update_backups.iter() {
         match reason {
+            pkg::BackupReason::Exists => {
+                ui::warning(&format!("{} was exists with no install history on record! The existing file was left untouched.", metadata.name));
+                ui::info(&format!("The new package version for {} was saved to {} for you to review.", metadata.name, backup_file.display()));
+            }
             pkg::BackupReason::Modified => {
                 ui::warning(&format!("{} was modified locally! The existing file was left untouched.", metadata.name));
                 ui::info(&format!("The new package version for {} was saved to {} for you to review.", metadata.name, backup_file.display()));
             }
             pkg::BackupReason::Updated => {
-                ui::info(&format!("{} ships a new default for an existing config file. The installed file was left untouched.", metadata.name));
+                ui::info(&format!("{} ships new default for a backup file. The existing file was left untouched.", metadata.name));
                 ui::info(&format!("The new package version for {} was saved to {} for you to review.", metadata.name, backup_file.display()));
             }
         }
@@ -214,26 +220,6 @@ fn run_post_install_hook(cfg: &Config, extracted: &ExtractedPackage) -> Option<S
     None
 }
 
-fn cleanup(path: &PathBuf) {
-    if path.is_dir() {
-        if let Ok(read_dir) = fs::read_dir(path) {
-            for entry in read_dir.flatten() {
-                let entry_path = entry.path();
-                if entry_path.is_dir() {
-                    let _ = fs::remove_dir_all(&entry_path);
-                } else {
-                    let _ = fs::remove_file(&entry_path);
-                }
-            }
-        }
-    }
-    if let Some(path_str) = path.to_str() {
-        if let Ok(c_path) = CString::new(path_str) {
-            let _ = unsafe { libc::rmdir(c_path.as_ptr()) };
-        }
-    }
-}
-
 // Copy every file the previous version of a package owns into
 // "cfg.pkg_backup_dir()/<pkg>-<old-version>/....". (mirroring their path
 // relative to "install_root"), before the new version overwrites them.
@@ -246,7 +232,7 @@ fn backup_previous_files(cfg: &Config, previous: &InstalledPackage) -> Result<Pa
     // Clear out any stale backup left over from an earlier failed attempt
     // before writing a fresh one.
     if backup_root.exists() {
-        cleanup(&backup_root);
+        let _ = cleanup(&backup_root);
     }
     fs::create_dir_all(&backup_root).map_err(LkpmError::Io)?;
     for file in previous.files.iter() {
@@ -327,12 +313,7 @@ fn rollback_extracted_package(cfg: &Config, db: &mut Database, extracted: &Extra
                     }
                 }
                 if !prev_files.contains(file) && file.exists() && file.is_dir() {
-                    if let Err(e) = fs::remove_dir(file) {
-                        ui::warning(&format!(
-                            "Failed to remove new directory {} while rolling back {}: {}",
-                            file.display(), extracted.metadata.name, e
-                        ));
-                    }
+                    let _ = fs::remove_dir(file);
                 }
             }
             if let Err(e) = db.register(cfg, prev.clone()) {
@@ -385,12 +366,7 @@ fn rollback_extracted_package(cfg: &Config, db: &mut Database, extracted: &Extra
                     }
                 }
                 if file.exists() && file.is_dir() {
-                    if let Err(e) = fs::remove_dir(file) {
-                        ui::warning(&format!(
-                            "Failed to remove directory {} while rolling back {}: {}",
-                            file.display(), extracted.metadata.name, e
-                        ));
-                    }
+                    let _ = fs::remove_dir(file);
                 }
             }
             if let Err(e) = db.remove(cfg, &extracted.metadata.name) {
@@ -1178,7 +1154,7 @@ pub fn handle(cmd: Command) -> Result<(), LkpmError> {
                         }
                         crate::downloader::clear_download_dir(&cfg);
                         return Err(LkpmError::Other(format!(
-                            "Failed to extract {} ({}): {}. Aborting the whole installation! No post_install hooks were run for any package in this batch.",
+                            "Failed to extract {} ({}): {}. Aborting the whole installation!",
                             metadata.name, metadata.version, err
                         )));
                     }
@@ -1672,7 +1648,7 @@ fn cleanup_package_assets(
                     return Err(LkpmError::Io(e));
                 }
                 ui::warning(&format!(
-                    "{} was modified locally! Kept saved as {}.",
+                    "{} was modified locally! It will saved at {}.",
                     file.display(),
                     saved_path.display()
                 ));

@@ -5,7 +5,6 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{BufReader, Read};
-use std::ffi::CString;
 use std::path::{Component, Path, PathBuf};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -15,6 +14,7 @@ use xz2::read::XzDecoder;
 use zstd::Decoder;
 use crate::config::Config;
 use crate::repo;
+use crate::cleanup::cleanup;
 
 #[derive(Debug, Clone)]
 pub struct PackageMetadata {
@@ -39,31 +39,7 @@ pub struct BackupsAwareInstall {
 pub enum BackupReason {
     Updated,
     Modified,
-}
-
-struct TempDirGuard<'a>(&'a Path);
-
-impl Drop for TempDirGuard<'_> {
-    fn drop(&mut self) {
-        let path = self.0;
-        if path.is_dir() {
-            if let Ok(read_dir) = fs::read_dir(path) {
-                for entry in read_dir.flatten() {
-                    let entry_path = entry.path();
-                    if entry_path.is_dir() {
-                        let _ = fs::remove_dir_all(&entry_path);
-                    } else {
-                        let _ = fs::remove_file(&entry_path);
-                    }
-                }
-            }
-        }
-        if let Some(path_str) = path.to_str() {
-            if let Ok(c_path) = CString::new(path_str) {
-                let _ = unsafe { libc::rmdir(c_path.as_ptr()) };
-            }
-        }
-    }
+    Exists,
 }
 
 pub fn read_package_metadata(path: &Path) -> Result<PackageMetadata> {
@@ -187,6 +163,7 @@ pub fn install_package(
 ) -> Result<Vec<PathBuf>> {
     let updated_backup_root = install_root.join("etc/lkpm.d/backups/pkg-updated");
     let modified_backup_root = install_root.join("etc/lkpm.d/backups/pkg-modified");
+    let exists_backup_root = install_root.join("etc/lkpm.d/backups/pkg-exists");
     // No backups list is passed here, so the stash path is never actually
     // used, but install_package_with_backups still wants a package name.
     let package_name = path
@@ -201,6 +178,7 @@ pub fn install_package(
         &HashMap::new(), 
         &updated_backup_root, 
         &modified_backup_root, 
+        &exists_backup_root,
         pb
     )?;
     Ok(result.installed_files)
@@ -372,6 +350,7 @@ pub fn install_package_with_backups(
     previous_hashes: &HashMap<String, String>,
     updated_backup_root: &Path,
     modified_backup_root: &Path,
+    exists_backup_root: &Path,
     pb: Option<&ProgressBar>,
 ) -> Result<BackupsAwareInstall> {
     let conf = Config::load();
@@ -383,11 +362,11 @@ pub fn install_package_with_backups(
         .as_nanos();
     let tmp_dir = tmp_base.join(format!("extract-{}-{}", pid, timestamp));
     fs::create_dir_all(&tmp_dir)?;
-    let _ = TempDirGuard(&tmp_dir);
+    let _ = cleanup(&tmp_dir);
     let tmp_path = tmp_dir.as_path();
     let tmp_backup_root = conf.tmp_backup_dir().join(format!("preserve-{}-{}", pid, timestamp));
     fs::create_dir_all(&tmp_backup_root)?;
-    let _ = TempDirGuard(&tmp_backup_root);
+    let _ = cleanup(&tmp_backup_root);
     {
         let reader = open_package_reader(package_path)?;
         let mut archive = Archive::new(reader);
@@ -421,17 +400,16 @@ pub fn install_package_with_backups(
             let existing_hash = hash_file(&target_path).unwrap_or_default();
             let original_hash = previous_hashes.get(&rel_str);
             let new_file_path = tmp_path.join(&resolved_path);
-            let modified = match original_hash {
-                Some(orig) => existing_hash != *orig,
-                None => true,
-            };
+            let has_history = original_hash.is_some();
             let new_hash = if new_file_path.exists() {
                 hash_file(&new_file_path).unwrap_or_default()
             } else {
                 String::new()
             };
-            let updated = existing_hash != new_hash;
-            if updated || modified {
+            let exists = !has_history && existing_hash != new_hash;
+            let modified = has_history && existing_hash != *original_hash.unwrap();
+            let updated = has_history && existing_hash != new_hash;
+            if exists || modified || updated {
                 let preserved_dest = tmp_backup_root.join(&resolved_path);
                 if let Some(parent) = preserved_dest.parent() {
                     let _ = fs::create_dir_all(parent);
@@ -440,16 +418,15 @@ pub fn install_package_with_backups(
                     preserved_backups.push((target_path.clone(), preserved_dest));
                 }
             }
-            if updated {
+            if exists {
                 let file_name = entry_path.file_name().unwrap_or_default();
-                let stash_dest = Config::lkpmsave_path(updated_backup_root, package_name, file_name);
+                let stash_dest = Config::lkpmsave_path(exists_backup_root, package_name, file_name);
                 if let Some(parent) = stash_dest.parent() {
                     let _ = fs::create_dir_all(parent);
                 }
                 let _ = fs::copy(&new_file_path, &stash_dest);
-                update_backups.push((stash_dest.clone(), BackupReason::Updated));
-            }
-            if modified {
+                update_backups.push((stash_dest.clone(), BackupReason::Exists));
+            } else if modified {
                 let file_name = entry_path.file_name().unwrap_or_default();
                 let stash_dest = Config::lkpmsave_path(modified_backup_root, package_name, file_name);
                 if let Some(parent) = stash_dest.parent() {
@@ -457,6 +434,14 @@ pub fn install_package_with_backups(
                 }
                 let _ = fs::copy(&new_file_path, &stash_dest);
                 update_backups.push((stash_dest.clone(), BackupReason::Modified));
+            } else if updated {
+                let file_name = entry_path.file_name().unwrap_or_default();
+                let stash_dest = Config::lkpmsave_path(updated_backup_root, package_name, file_name);
+                if let Some(parent) = stash_dest.parent() {
+                    let _ = fs::create_dir_all(parent);
+                }
+                let _ = fs::copy(&new_file_path, &stash_dest);
+                update_backups.push((stash_dest.clone(), BackupReason::Updated));
             }
         }
         if let Some(pb) = pb {
@@ -480,8 +465,8 @@ pub fn install_package_with_backups(
             );
         }
     }
-    let _ = TempDirGuard(&tmp_backup_root);
-    let _ = TempDirGuard(&tmp_dir);
+    let _ = cleanup(&tmp_backup_root);
+    let _ = cleanup(&tmp_dir);
     for backup_rel in backup_set.keys() {
         let target_path = install_root.join(backup_rel);
         if target_path.exists() && target_path.is_file() {

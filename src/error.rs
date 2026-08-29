@@ -13,8 +13,8 @@ impl fmt::Display for LkpmError {
         match self {
             Self::Network(msg) => write!(f, "Network error: {}. Check your internet connection before running lkpm!", msg),
             Self::PackageNotFound(msg) => write!(f, "Package not found: {}. Try running 'lkpm -r' to update repository metadata if the package exists in any configured repository!", msg),
-            Self::Io(e) => write!(f, "{}!", e),
-            Self::Other(msg) => write!(f, "{}!", msg),
+            Self::Io(e) => write!(f, "{}", e),
+            Self::Other(msg) => write!(f, "{}", msg),
         }
     }
 }

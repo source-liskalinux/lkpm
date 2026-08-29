@@ -67,6 +67,7 @@ impl Config {
         let _ = self.backup_dir();
         let _ = self.modified_backup_dir();
         let _ = self.updated_backup_dir();
+        let _ = self.exists_backup_dir();
         let _ = self.deleted_backup_dir();
         Ok(())
     }
@@ -211,6 +212,11 @@ impl Config {
     }
     pub fn updated_backup_dir(&self) -> PathBuf {
         let dir = self.install_root.join("etc/lkpm.d/backups/pkg-updated");
+        let _ = Config::ensure_dir(&dir);
+        dir
+    }
+    pub fn exists_backup_dir(&self) -> PathBuf {
+        let dir = self.install_root.join("etc/lkpm.d/backups/pkg-exists");
         let _ = Config::ensure_dir(&dir);
         dir
     }

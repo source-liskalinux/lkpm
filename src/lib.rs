@@ -1,5 +1,6 @@
 pub mod chroot;
 pub mod cli;
+pub mod cleanup;
 pub mod config;
 pub mod database;
 pub mod downloader;

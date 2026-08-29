@@ -1,0 +1,93 @@
+# lkpm.install post-upgrade scriptlet for the lkpm bundle.
+#
+# lkinit builds /boot/initramfs-liska.img from etc/lkinit.d/init.rs and
+# etc/lkinit.d/Cargo.toml. Both are listed in PKGBUILD backup=() so a
+# locally customized init.rs never gets silently overwritten by a package
+# upgrade: lkpm backup-aware installer always leaves the currently
+# installed copy in place and stashes the new one for review instead,
+# under one of
+#   etc/lkpm.d/backups/pkg-updated/lkpm/<file>.save   (untouched by you)
+#   etc/lkpm.d/backups/pkg-modified/lkpm/<file>.save  (you edited it)
+#   etc/lkpm.d/backups/pkg-existing/lkpm/<file>.save  (no install history)
+#
+# That means a plain post_upgrade hook that just calls "lkinit" would keep
+# rebuilding from the OLD template forever. This scriptlet instead:
+#   - auto-promotes the staged file over the live one ONLY when it's the
+#     pkg-updated (untouched) stash, since there no local edit to lose
+#   - leaves a pkg-modified OR pkg-existing stash alone and just tells you
+#     where it is, so an intentional local customization (or a file we
+#     simply have no history for) is never discarded automatically
+#   - reruns lkinit whenever something it depends on actually changed
+#
+# Runs relative to the install root (or inside the chroot for
+# `lkpm --root <path>` installs), same as the backup= paths above.
+
+_pkg="lkpm"
+_lkinit_dir="etc/lkinit.d"
+_backups="etc/lkpm.d/backups"
+_lkinit_files="init.rs Cargo.toml"
+
+_regen_initramfs() {
+    if ! command -v lkinit >/dev/null 2>&1; then
+        echo "--> lkinit not found on PATH! Skipping initramfs regen...."
+        return
+    fi
+    echo "--> Regenerating /boot/initramfs-liska.img from ${_lkinit_dir}...."
+    if ! lkinit; then
+        echo "--> WARNING: lkinit failed! Once ${_lkinit_dir}/init.rs is sorted out,"
+        echo "    run 'lkinit' by hand to rebuild the initramfs."
+    fi
+}
+
+# Promotes a pkg-updated stash for one file over the live copy, but only if
+# there is no competing pkg-modified or pkg-existing stash (either one means
+# we must not assume it's safe to clobber the live file).
+#   returns 0 if it promoted a new version (caller should regen)
+#   returns 1 if a local edit or unknown-history file needs manual review (no regen)
+#   returns 2 if nothing changed for this file
+_promote_if_untouched() {
+    local file_name="$1"
+    local live="${_lkinit_dir}/${file_name}"
+    local updated_stash="${_backups}/pkg-updated/${_pkg}/${file_name}.save"
+    local modified_stash="${_backups}/pkg-modified/${_pkg}/${file_name}.save"
+    local existing_stash="${_backups}/pkg-existing/${_pkg}/${file_name}.save"
+    if [ -f "$modified_stash" ]; then
+        echo "--> NOTE: ${live} was modified locally!"
+        echo "    The package new default was saved to ${modified_stash}."
+        echo "    Merge whatever you need by hand, then run 'lkinit' yourself."
+        return 1
+    fi
+    if [ -f "$existing_stash" ]; then
+        echo "--> NOTE: ${live} has no install history on record (predates"
+        echo "    tracking, or was already present before this package"
+        echo "    installed it)! The package new default was saved to"
+        echo "    ${existing_stash}."
+        echo "    Review and merge by hand if needed, then run 'lkinit' yourself."
+        return 1
+    fi
+    if [ -f "$updated_stash" ]; then
+        echo "--> ${live} was unmodified. Applying the new default from ${updated_stash}...."
+        if cp -f "$updated_stash" "$live"; then
+            rm -f "$updated_stash"
+            return 0
+        fi
+        echo "--> WARNING: failed to copy ${updated_stash} over ${live}!"
+        return 1
+    fi
+    return 2
+}
+
+post_upgrade() {
+    changed=0
+    for f in $_lkinit_files; do
+        _promote_if_untouched "$f"
+        case $? in
+            0) changed=1 ;;
+        esac
+    done
+    if [ "$changed" -eq 1 ]; then
+        _regen_initramfs
+    else
+        echo "--> ${_lkinit_dir} unchanged (or awaiting a manual merge)! Skipping initramfs regen...."
+    fi
+}
