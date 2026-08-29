@@ -63,9 +63,11 @@ impl Config {
         let _ = self.install_script_dir();
         let _ = self.pkg_backup_dir();
         let _ = self.tmp_install_dir();
+        let _ = self.tmp_backup_dir();
         let _ = self.backup_dir();
-        let _ = self.update_backup_dir();
-        let _ = self.delete_backup_dir();
+        let _ = self.modified_backup_dir();
+        let _ = self.updated_backup_dir();
+        let _ = self.deleted_backup_dir();
         Ok(())
     }
     pub fn load() -> Self {
@@ -192,18 +194,28 @@ impl Config {
         let _ = Config::ensure_private_dir(&dir);
         dir
     }
+    pub fn tmp_backup_dir(&self) -> PathBuf {
+        let dir = self.cache_path.join("tmp-backup");
+        let _ = Config::ensure_private_dir(&dir);
+        dir
+    }
     pub fn backup_dir(&self) -> PathBuf {
         let dir = self.install_root.join("etc/lkpm.d/backups");
         let _ = Config::ensure_dir(&dir);
         dir
     }
-    pub fn update_backup_dir(&self) -> PathBuf {
-        let dir = self.install_root.join("etc/lkpm.d/backups/pkg-update");
+    pub fn modified_backup_dir(&self) -> PathBuf {
+        let dir = self.install_root.join("etc/lkpm.d/backups/pkg-modified");
         let _ = Config::ensure_dir(&dir);
         dir
     }
-    pub fn delete_backup_dir(&self) -> PathBuf {
-        let dir = self.install_root.join("etc/lkpm.d/backups/pkg-delete");
+    pub fn updated_backup_dir(&self) -> PathBuf {
+        let dir = self.install_root.join("etc/lkpm.d/backups/pkg-updated");
+        let _ = Config::ensure_dir(&dir);
+        dir
+    }
+    pub fn deleted_backup_dir(&self) -> PathBuf {
+        let dir = self.install_root.join("etc/lkpm.d/backups/pkg-deleted");
         let _ = Config::ensure_dir(&dir);
         dir
     }

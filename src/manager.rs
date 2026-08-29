@@ -78,7 +78,8 @@ struct ExtractedPackage {
     install_script: Option<String>,
     previous_version: Option<String>,
     previous_record: Option<InstalledPackage>,
-    update_backups: Vec<PathBuf>,
+    update_backups: Vec<(PathBuf, pkg::BackupReason)>,
+    preserved_paths: Vec<PathBuf>,
     backup_dir: Option<PathBuf>,
 }
 
@@ -128,7 +129,8 @@ fn extract_package(
         Some(prev) => Some(backup_previous_files(cfg, prev)?),
         None => None,
     };
-    let update_backup_root = cfg.update_backup_dir();
+    let update_backup_root = cfg.updated_backup_dir();
+    let modified_backup_root = cfg.modified_backup_dir();
     let result = pkg::install_package_with_backups(
         path,
         &cfg.install_root,
@@ -136,12 +138,21 @@ fn extract_package(
         &metadata.backups,
         &previous_hashes,
         &update_backup_root,
+        &modified_backup_root,
         None,
     )
     .map_err(LkpmError::from)?;
-    for backup_file in result.update_backups.iter() {
-        ui::warning(&format!("{} was modified locally! The existing file was left untouched.", metadata.name));
-        ui::info(&format!("The new package version for {} was saved to {} for you to review.", metadata.name, backup_file.display()));
+    for (backup_file, reason) in result.update_backups.iter() {
+        match reason {
+            pkg::BackupReason::Modified => {
+                ui::warning(&format!("{} was modified locally! The existing file was left untouched.", metadata.name));
+                ui::info(&format!("The new package version for {} was saved to {} for you to review.", metadata.name, backup_file.display()));
+            }
+            pkg::BackupReason::Updated => {
+                ui::info(&format!("{} ships a new default for an existing config file. The installed file was left untouched.", metadata.name));
+                ui::info(&format!("The new package version for {} was saved to {} for you to review.", metadata.name, backup_file.display()));
+            }
+        }
     }
     let backups_paths: Vec<PathBuf> = metadata
         .backups
@@ -157,6 +168,7 @@ fn extract_package(
         previous_version: previous.as_ref().map(|p| p.version.clone()),
         previous_record: previous,
         update_backups: result.update_backups,
+        preserved_paths: result.preserved_paths,
         backup_dir,
     })
 }
@@ -294,12 +306,8 @@ fn rollback_extracted_package(cfg: &Config, db: &mut Database, extracted: &Extra
         "Rolling back {} ({})....",
         extracted.metadata.name, extracted.metadata.version
     ));
-    let update_backup_root = cfg.update_backup_dir();
-    let mut untouched: HashSet<PathBuf> = HashSet::new();
-    for stash in extracted.update_backups.iter() {
-        if let Ok(rel) = stash.strip_prefix(&update_backup_root) {
-            untouched.insert(cfg.install_root.join(rel));
-        }
+    let untouched: HashSet<PathBuf> = extracted.preserved_paths.iter().cloned().collect();
+    for (stash, _reason) in extracted.update_backups.iter() {
         let _ = fs::remove_file(stash);
     }
     match (&extracted.backup_dir, &extracted.previous_record) {
@@ -1654,7 +1662,7 @@ fn cleanup_package_assets(
             let modified = matches!((&current_hash, pristine_hash), (Some(current), Some(pristine)) if current != pristine);
             if modified {
                 let file_name = file.file_name().unwrap_or_default();
-                let saved_path = Config::lkpmsave_path(&cfg.delete_backup_dir(), &record.name, file_name);
+                let saved_path = Config::lkpmsave_path(&cfg.deleted_backup_dir(), &record.name, file_name);
                 if let Some(parent) = saved_path.parent() {
                     if let Err(e) = fs::create_dir_all(parent) {
                         return Err(LkpmError::Io(e));

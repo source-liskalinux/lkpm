@@ -31,7 +31,14 @@ pub struct PackageMetadata {
 pub struct BackupsAwareInstall {
     pub installed_files: Vec<PathBuf>,
     pub backups_hashes: HashMap<String, String>,
-    pub update_backups: Vec<PathBuf>,
+    pub update_backups: Vec<(PathBuf, BackupReason)>,
+    pub preserved_paths: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackupReason {
+    Updated,
+    Modified,
 }
 
 struct TempDirGuard<'a>(&'a Path);
@@ -178,14 +185,24 @@ pub fn install_package(
     install_root: &Path,
     pb: Option<&ProgressBar>,
 ) -> Result<Vec<PathBuf>> {
-    let update_backup_root = install_root.join("etc/lkpm.d/backups/pkg-update");
+    let updated_backup_root = install_root.join("etc/lkpm.d/backups/pkg-updated");
+    let modified_backup_root = install_root.join("etc/lkpm.d/backups/pkg-modified");
     // No backups list is passed here, so the stash path is never actually
     // used, but install_package_with_backups still wants a package name.
     let package_name = path
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_default();
-    let result = install_package_with_backups(path, install_root, &package_name, &[], &HashMap::new(), &update_backup_root, pb)?;
+    let result = install_package_with_backups(
+        path, 
+        install_root, 
+        &package_name, 
+        &[], 
+        &HashMap::new(), 
+        &updated_backup_root, 
+        &modified_backup_root, 
+        pb
+    )?;
     Ok(result.installed_files)
 }
 
@@ -353,7 +370,8 @@ pub fn install_package_with_backups(
     package_name: &str,
     backups: &[String],
     previous_hashes: &HashMap<String, String>,
-    update_backup_root: &Path,
+    updated_backup_root: &Path,
+    modified_backup_root: &Path,
     pb: Option<&ProgressBar>,
 ) -> Result<BackupsAwareInstall> {
     let conf = Config::load();
@@ -367,6 +385,9 @@ pub fn install_package_with_backups(
     fs::create_dir_all(&tmp_dir)?;
     let _ = TempDirGuard(&tmp_dir);
     let tmp_path = tmp_dir.as_path();
+    let tmp_backup_root = conf.tmp_backup_dir().join(format!("preserve-{}-{}", pid, timestamp));
+    fs::create_dir_all(&tmp_backup_root)?;
+    let _ = TempDirGuard(&tmp_backup_root);
     {
         let reader = open_package_reader(package_path)?;
         let mut archive = Archive::new(reader);
@@ -382,8 +403,8 @@ pub fn install_package_with_backups(
         .collect();
     let mut installed_files = Vec::new();
     let mut backups_hashes = HashMap::new();
-    let mut update_backups = Vec::new();
-    let mut modified_backups = Vec::new();
+    let mut update_backups: Vec<(PathBuf, BackupReason)> = Vec::new();
+    let mut preserved_backups: Vec<(PathBuf, PathBuf)> = Vec::new();
     let reader = open_package_reader(package_path)?;
     let mut archive = Archive::new(reader);
     for entry in archive.entries()? {
@@ -400,7 +421,7 @@ pub fn install_package_with_backups(
             let existing_hash = hash_file(&target_path).unwrap_or_default();
             let original_hash = previous_hashes.get(&rel_str);
             let new_file_path = tmp_path.join(&resolved_path);
-            let user_modified = match original_hash {
+            let modified = match original_hash {
                 Some(orig) => existing_hash != *orig,
                 None => true,
             };
@@ -409,16 +430,33 @@ pub fn install_package_with_backups(
             } else {
                 String::new()
             };
-            let modified = user_modified && (existing_hash != new_hash);
-            if modified {
+            let updated = existing_hash != new_hash;
+            if updated || modified {
+                let preserved_dest = tmp_backup_root.join(&resolved_path);
+                if let Some(parent) = preserved_dest.parent() {
+                    let _ = fs::create_dir_all(parent);
+                }
+                if fs::copy(&target_path, &preserved_dest).is_ok() {
+                    preserved_backups.push((target_path.clone(), preserved_dest));
+                }
+            }
+            if updated {
                 let file_name = entry_path.file_name().unwrap_or_default();
-                let stash_dest = Config::lkpmsave_path(update_backup_root, package_name, file_name);
+                let stash_dest = Config::lkpmsave_path(updated_backup_root, package_name, file_name);
                 if let Some(parent) = stash_dest.parent() {
                     let _ = fs::create_dir_all(parent);
                 }
                 let _ = fs::copy(&new_file_path, &stash_dest);
-                update_backups.push(stash_dest.clone());
-                modified_backups.push((target_path, stash_dest));
+                update_backups.push((stash_dest.clone(), BackupReason::Updated));
+            }
+            if modified {
+                let file_name = entry_path.file_name().unwrap_or_default();
+                let stash_dest = Config::lkpmsave_path(modified_backup_root, package_name, file_name);
+                if let Some(parent) = stash_dest.parent() {
+                    let _ = fs::create_dir_all(parent);
+                }
+                let _ = fs::copy(&new_file_path, &stash_dest);
+                update_backups.push((stash_dest.clone(), BackupReason::Modified));
             }
         }
         if let Some(pb) = pb {
@@ -434,9 +472,16 @@ pub fn install_package_with_backups(
             unpack_entry_safely(&mut entry, install_root)?;
         }
     }
-    for (target_path, stash_dest) in modified_backups {
-        let _ = fs::copy(&stash_dest, &target_path);
+    for (target_path, preserved_src) in &preserved_backups {
+        if let Err(e) = fs::copy(preserved_src, target_path) {
+            eprintln!(
+                "warning: failed to restore {} after {} installed a new version: {}",
+                target_path.display(), package_name, e
+            );
+        }
     }
+    let _ = TempDirGuard(&tmp_backup_root);
+    let _ = TempDirGuard(&tmp_dir);
     for backup_rel in backup_set.keys() {
         let target_path = install_root.join(backup_rel);
         if target_path.exists() && target_path.is_file() {
@@ -445,10 +490,12 @@ pub fn install_package_with_backups(
             }
         }
     }
+    let preserved_paths: Vec<PathBuf> = preserved_backups.iter().map(|(target, _)| target.clone()).collect();
     Ok(BackupsAwareInstall {
         installed_files,
         backups_hashes,
         update_backups,
+        preserved_paths,
     })
 }
 
