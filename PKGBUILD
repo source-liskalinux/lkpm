@@ -37,7 +37,7 @@ build() {
 }
 
 check() {
-    cargo test --release
+    cargo test --release --all-targets
 }
 
 package() {
