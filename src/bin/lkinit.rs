@@ -254,7 +254,12 @@ fn main() {
     while i < args.len() {
         match args[i].as_str() {
             "--root" => {
-                if i + 1 < args.len() { rootfs = PathBuf::from(&args[i + 1]); i += 1; }
+                if i + 1 < args.len() {
+                    rootfs = PathBuf::from(&args[i + 1]); i += 1;
+                    let cache_dir = rootfs.join("var/cache/lkinit");
+                    fs::lkcreate(&cache_dir).ok();
+                    fs::lkpermissions(&cache_dir, &"700".to_string()).ok();
+                }
             }
             "--output" => {
                 if i + 1 < args.len() { output = PathBuf::from(&args[i + 1]); i += 1; }
