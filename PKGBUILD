@@ -67,6 +67,9 @@ package() {
     install -Dm 755 "./target/release/lkmake" "${pkgdir}/usr/bin/lkmake"
     echo "--> [PACKAGE] Installing lkinit...."
     install -Dm 755 "./target/release/lkinit" "${pkgdir}/usr/bin/lkinit"
+    install -dm 700 "${pkgdir}/var/cache/lkinit"
+    chmod 700 "${pkgdir}/var/cache/lkinit"
+    chown root:root "${pkgdir}/var/cache/lkinit"
     if [ -f "./etc/lkinit.d/init.rs" ]; then
         install -Dm 644 "./etc/lkinit.d/init.rs" "${pkgdir}/etc/lkinit.d/init.rs"
     fi
