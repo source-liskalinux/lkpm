@@ -107,7 +107,7 @@ fn compile_init_template(rootfs: &Path, target_init_bin: &Path) -> Result<(), St
     }
     let mut build_dir = rootfs.join("var/cache/lkinit/init");
     if !build_dir.exists() {
-        build_dir = PathBuf::from("/var/cache/lkinit/lkinit");
+        build_dir = PathBuf::from("/var/cache/lkinit/init");
     }
     fs::lkremove(&build_dir).ok();
     fs::lkcreate(&build_dir.join("src")).map_err(|e| e.to_string())?;
@@ -128,7 +128,7 @@ fn compile_init_template(rootfs: &Path, target_init_bin: &Path) -> Result<(), St
         .env("RUSTFLAGS", "-C target-feature=+crt-static")
         .args(&[
             "build",
-            "--manifest-path", "/tmp/lkinit/init/Cargo.toml",
+            "--manifest-path", &build_dir.join("Cargo.toml").display().to_string(),
             "--release",
             "--target", "x86_64-unknown-linux-musl"
         ])
