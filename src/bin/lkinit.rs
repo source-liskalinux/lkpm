@@ -199,7 +199,7 @@ pub fn generate_liska_initramfs(rootfs: &Path, output_img: &Path) -> Result<(), 
         for link in busybox_links {
             let link_path = temp_ramdisk.join("usr/bin").join(link);
             let _ = fs::lkremove(&link_path);
-            let _ = fs::lksymlink(&temp_ramdisk.join(PathBuf::from("usr/bin/busybox")), &link_path);
+            let _ = fs::lksymlink(&PathBuf::from("busybox"), &link_path);
             let _ = run_command("chmod", &["+x", link_path.to_str().unwrap()]);
         }
     }
