@@ -5,7 +5,7 @@ use std::process::{Command, exit, Stdio};
 use std::io::{Write, Read};
 use indicatif::{ProgressBar, ProgressStyle};
 use lkpm::ui::{info, success, error};
-use liska::fs;
+use liblk::fs;
 
 fn require_root() {
     if unsafe { libc::getuid() } != 0 {

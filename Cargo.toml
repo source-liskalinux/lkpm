@@ -21,7 +21,7 @@ rusqlite = { version = "0.40.1", features = ["bundled"] }
 mlua = { version = "0.12.0", features = ["lua54", "vendored"] }
 chrono = "0.4"
 hex = "0.4"
-liska = "1.0.2-1"
+liblk = "1.0.0"
 
 [[bin]]
 name = "lkmake"
