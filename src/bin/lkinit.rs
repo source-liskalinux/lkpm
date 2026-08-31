@@ -90,7 +90,7 @@ fn pack_initramfs_with_progress(temp_ramdisk: &Path, output_img: &Path) -> Resul
     Ok(())
 }
 
-fn compile_init_template(rootfs: &Path, target_init_bin: &Path) -> Result<(), String> {
+fn compile_init_template(rootfs: &Path, cache_dir: &Path, target_init_bin: &Path) -> Result<(), String> {
     info("Compiling /etc/lkinit.d/init.rs....");
     let template_rootfs = rootfs.join("etc/lkinit.d/init.rs");
     let cargo_rootfs = rootfs.join("etc/lkinit.d/Cargo.toml");
@@ -105,10 +105,7 @@ fn compile_init_template(rootfs: &Path, target_init_bin: &Path) -> Result<(), St
     if !template_path.exists() || !cargo_path.exists() {
         return Err("CRITICAL: Init template (init.rs) or Cargo.toml not found!".into());
     }
-    let mut build_dir = rootfs.join("var/cache/lkinit/init");
-    if !build_dir.exists() {
-        build_dir = PathBuf::from("/var/cache/lkinit/init");
-    }
+    let build_dir = cache_dir.join("init");
     fs::lkremove(&build_dir).ok();
     fs::lkcreate(&build_dir.join("src")).map_err(|e| e.to_string())?;
     fs::lkcopy(&template_path, &build_dir.join("src/main.rs"))
@@ -144,7 +141,7 @@ fn compile_init_template(rootfs: &Path, target_init_bin: &Path) -> Result<(), St
     Ok(())
 }
 
-pub fn generate_liska_initramfs(rootfs: &Path, output_img: &Path) -> Result<(), String> {
+pub fn generate_liska_initramfs(rootfs: &Path, cache_dir: &Path, output_img: &Path) -> Result<(), String> {
     info("Starting to generate initramfs-liska.img....");
     let rootfs_mod_dir = rootfs.join("usr/lib/modules");
     let mut kernel_version = String::new();
@@ -161,10 +158,7 @@ pub fn generate_liska_initramfs(rootfs: &Path, output_img: &Path) -> Result<(), 
     if kernel_version.is_empty() {
         return Err("FATAL: kernel version not found!".into());
     }
-    let mut temp_ramdisk = rootfs.join("var/cache/lkinit/ramdisk");
-    if !temp_ramdisk.exists() {
-        temp_ramdisk = PathBuf::from("/var/cache/lkinit/ramdisk");
-    }
+    let temp_ramdisk = cache_dir.join("ramdisk");
     fs::lkremove(&temp_ramdisk).ok();
     let dirs = &[
         "dev", "proc", "sys", "root", "run", "etc",
@@ -200,7 +194,7 @@ pub fn generate_liska_initramfs(rootfs: &Path, output_img: &Path) -> Result<(), 
             let link_path = temp_ramdisk.join("usr/bin").join(link);
             let _ = fs::lkremove(&link_path);
             let _ = fs::lksymlink(&PathBuf::from("busybox"), &link_path);
-            let _ = run_command("chmod", &["+x", link_path.to_str().unwrap()]);
+            let _ = fs::lkpermissions(&link_path, "+x");
         }
     }
     let liska_libs = &[
@@ -218,8 +212,8 @@ pub fn generate_liska_initramfs(rootfs: &Path, output_img: &Path) -> Result<(), 
         }
     }
     let init_path = temp_ramdisk.join("init");
-    compile_init_template(rootfs, &init_path)?;
-    run_command("chmod", &["+x", init_path.to_str().unwrap()])?;
+    compile_init_template(rootfs, &cache_dir, &init_path)?;
+    fs::lkpermissions(&init_path, "+x")?;
     if let Some(parent) = output_img.parent() {
         fs::lkcreate(&parent).ok();
     }
@@ -247,19 +241,11 @@ fn main() {
     require_root();
     let mut rootfs = PathBuf::from("/");
     let mut output = PathBuf::from("/boot/initramfs-liska.img");
-    let cache_dir = rootfs.join("var/cache/lkinit");
-    fs::lkcreate(&cache_dir).ok();
-    fs::lkpermissions(&cache_dir, &"700".to_string()).ok();
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
             "--root" => {
-                if i + 1 < args.len() {
-                    rootfs = PathBuf::from(&args[i + 1]); i += 1;
-                    let cache_dir = rootfs.join("var/cache/lkinit");
-                    fs::lkcreate(&cache_dir).ok();
-                    fs::lkpermissions(&cache_dir, &"700".to_string()).ok();
-                }
+                if i + 1 < args.len() { rootfs = PathBuf::from(&args[i + 1]); i += 1; }
             }
             "--output" => {
                 if i + 1 < args.len() { output = PathBuf::from(&args[i + 1]); i += 1; }
@@ -268,7 +254,10 @@ fn main() {
         }
         i += 1;
     }
-    if let Err(e) = generate_liska_initramfs(&rootfs, &output) {
+    let cache_dir = rootfs.join("var/cache/lkinit");
+    fs::lkcreate(&cache_dir).ok();
+    fs::lkpermissions(&cache_dir, &"700".to_string()).ok();
+    if let Err(e) = generate_liska_initramfs(&rootfs, &cache_dir, &output) {
         error(&format!("CRITICAL: {}", e));
         exit(1);
     }
